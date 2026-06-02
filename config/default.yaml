@@ -1,0 +1,60 @@
+pipeline:
+  max_qa_retries: 3
+  fail_on_critical_quality: true
+  parallel_execution: true
+
+data_source:
+  active: "sample"
+  sample:
+    race_id: "20260607-Tokyo-11"
+  production:
+    historical_api: ""
+    current_api: ""
+    web_search_engine: ""
+
+logging:
+  level: "INFO"
+  format: "structured"
+  log_dir: "output/logs"
+  per_agent_files: true
+
+output:
+  json_dir: "output/json"
+  markdown_dir: "output/markdown"
+  save_intermediate: true
+
+analysis:
+  method: "statistical"
+  feature_weights:
+    distance_aptitude: 0.15
+    track_aptitude: 0.12
+    recent_form: 0.20
+    closing_speed: 0.15
+    running_style: 0.08
+    jockey_stats: 0.12
+    trainer_stats: 0.08
+    pedigree: 0.05
+    weight_factors: 0.05
+
+odds:
+  max_web_evidence_adjustment: 0.15
+  value_threshold: 0.10
+  skip_if_no_value: true
+
+quality:
+  passing_score: 100
+  total_score: 120
+  prohibited_words:
+    - "絶対"
+    - "確定"
+    - "鉄板"
+    - "必ず儲かる"
+    - "回収保証"
+    - "100%"
+    - "間違いなく"
+
+note:
+  disclaimer: |
+    ※本予想は個人的な分析に基づくものであり、馬券の購入を保証するものではありません。
+    競馬にはリスクがあり、投資額以上の損失が生じる可能性があります。
+    自己責任でご判断ください。
