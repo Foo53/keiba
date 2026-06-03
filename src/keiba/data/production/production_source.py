@@ -291,11 +291,18 @@ class ProductionDataSource(DataSource):
         }
 
     def _build_backtest_data(self) -> list[dict]:
-        """バックテストデータを構築（サンプルレースリストを使用）"""
-        # 直近数ヶ月のレースIDを検索
+        """バックテストデータを構築（設定でリクエスト数を制限）"""
+        bt_config = (
+            self.config.get("data_source", {})
+            .get("production", {})
+            .get("backtest", {})
+        )
+        max_months = bt_config.get("max_months", 6)
+        max_races = bt_config.get("max_races", 20)
+
         now = datetime.now()
         all_race_ids = []
-        for month_offset in range(6):
+        for month_offset in range(max_months):
             year = now.year
             month = now.month - month_offset
             if month <= 0:
@@ -303,7 +310,7 @@ class ProductionDataSource(DataSource):
                 year -= 1
             try:
                 ids = self.netkeiba.search_races(year, month)
-                all_race_ids.extend(ids[:20])  # 各月20レース上限
+                all_race_ids.extend(ids[:max_races])
             except Exception:
                 continue
 
@@ -312,7 +319,7 @@ class ProductionDataSource(DataSource):
 
         # 最初の20レースの結果をバックテストデータとして使用
         backtest = []
-        for rid in all_race_ids[:20]:
+        for rid in all_race_ids[:max_races]:
             try:
                 results = self.netkeiba.get_race_results(rid)
                 entries = results.get("entries", [])

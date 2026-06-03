@@ -4,6 +4,7 @@ robots.txt 検査、ドメインごとのレート制限、ファイルベース
 1日リクエスト上限を備えた HTTP クライアント。
 """
 
+import base64
 import hashlib
 import json
 import logging
@@ -245,23 +246,28 @@ class RateLimitedHttpClient:
             return None
 
     def _write_cache(self, url: str, response: requests.Response) -> None:
-        """レスポンスをキャッシュに保存"""
+        """レスポンスをキャッシュに保存（raw bytes を base64 で保存）"""
         path = self._cache_path(url)
         path.parent.mkdir(parents=True, exist_ok=True)
         data = {
             "url": url,
             "fetched_at": datetime.now().isoformat(),
             "status_code": response.status_code,
-            "body": response.text,
+            "body_b64": base64.b64encode(response.content).decode("ascii"),
         }
-        path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        path.write_text(json.dumps(data), encoding="utf-8")
 
     def _make_cached_response(self, cached: dict) -> requests.Response:
         """キャッシュデータから requests.Response 風のオブジェクトを生成"""
         resp = requests.Response()
         resp.status_code = cached.get("status_code", 200)
-        resp._content = cached.get("body", "").encode("utf-8")
-        resp.encoding = "utf-8"
+        if "body_b64" in cached:
+            # 新形式: raw bytes を base64 から復元
+            resp._content = base64.b64decode(cached["body_b64"])
+        else:
+            # 旧形式: テキストとして保存されていたデータ（文字化け可能性あり）
+            resp._content = cached.get("body", "").encode("utf-8")
+            resp.encoding = "utf-8"
         resp.url = cached.get("url", "")
         return resp
 

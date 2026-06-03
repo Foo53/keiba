@@ -103,7 +103,7 @@ class FeatureGenerator(BaseAgent):
             score = max(0, 100 - dist_diff * 0.05)
             pos = pp.get("finish_position", 5)
             total = pp.get("total_runners", 10)
-            score *= (1 - pos / total * 0.5)
+            score *= (1 - pos / max(total, 1) * 0.5)
             scores.append(score)
             distances.append(d)
         avg_score = sum(scores) / len(scores)

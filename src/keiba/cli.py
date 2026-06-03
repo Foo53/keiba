@@ -19,6 +19,7 @@ def main():
   keiba 20260607-Tokyo-11            レースID指定で実行
   keiba -v                           詳細ログ付き
   keiba --source sample              サンプルデータで実行
+  keiba --source production 202506010211  netkeiba形式IDで本番実行
         """,
     )
     parser.add_argument(

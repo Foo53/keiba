@@ -27,6 +27,9 @@ data_source:
     jra:
       enabled: true
       base_url: "https://www.jra.go.jp"
+    backtest:
+      max_months: 2
+      max_races: 5
 
 logging:
   level: "INFO"

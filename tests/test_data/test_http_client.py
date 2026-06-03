@@ -83,6 +83,7 @@ class TestCaching:
 
         mock_resp = MagicMock()
         mock_resp.status_code = 200
+        mock_resp.content = b"<html>fresh</html>"
         mock_resp.text = "<html>fresh</html>"
         mock_resp.raise_for_status = MagicMock()
 
@@ -96,7 +97,7 @@ class TestCaching:
         url = "https://example.com/newpage"
         mock_resp = MagicMock()
         mock_resp.status_code = 200
-        mock_resp.text = "<html>response</html>"
+        mock_resp.content = b"<html>response</html>"
         mock_resp.raise_for_status = MagicMock()
 
         with patch.object(http_client._session, "get", return_value=mock_resp):
@@ -108,7 +109,8 @@ class TestCaching:
         saved = cache_path / f"{key}.json"
         assert saved.exists()
         data = json.loads(saved.read_text(encoding="utf-8"))
-        assert data["body"] == "<html>response</html>"
+        import base64
+        assert base64.b64decode(data["body_b64"]) == b"<html>response</html>"
 
     def test_cache_ttl_override(self, http_client, tmp_path):
         """カスタム TTL でキャッシュヒット判定"""
@@ -153,7 +155,7 @@ class TestRobotsTxt:
 
         mock_resp = MagicMock()
         mock_resp.status_code = 200
-        mock_resp.text = "<html>ok</html>"
+        mock_resp.content = b"<html>ok</html>"
         mock_resp.raise_for_status = MagicMock()
 
         with patch("keiba.utils.http_client.RobotFileParser", return_value=mock_rp):
@@ -169,7 +171,7 @@ class TestRobotsTxt:
 
         mock_resp = MagicMock()
         mock_resp.status_code = 200
-        mock_resp.text = "<html>ok</html>"
+        mock_resp.content = b"<html>ok</html>"
         mock_resp.raise_for_status = MagicMock()
 
         with patch("keiba.utils.http_client.RobotFileParser", return_value=mock_rp):
@@ -194,7 +196,7 @@ class TestRateLimiting:
 
         mock_resp = MagicMock()
         mock_resp.status_code = 200
-        mock_resp.text = "<html>ok</html>"
+        mock_resp.content = b"<html>ok</html>"
         mock_resp.raise_for_status = MagicMock()
 
         with patch.object(slow_client._session, "get", return_value=mock_resp):
@@ -233,7 +235,7 @@ class TestRetry:
 
         success_resp = MagicMock()
         success_resp.status_code = 200
-        success_resp.text = "<html>ok</html>"
+        success_resp.content = b"<html>ok</html>"
         success_resp.raise_for_status = MagicMock()
 
         with patch.object(http_client._session, "get", side_effect=[fail_resp, success_resp]):
