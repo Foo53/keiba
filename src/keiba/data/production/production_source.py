@@ -161,6 +161,11 @@ class ProductionDataSource(DataSource):
         past_performances = {}
         jockey_stats = {}
 
+        horses = {}
+        past_performances = {}
+        jockey_stats = {}
+        trainer_stats = {}
+
         for entry in entries:
             horse_id = entry.get("horse_id", "")
             if not horse_id:
@@ -194,12 +199,30 @@ class ProductionDataSource(DataSource):
                         "favorite_win_rate": 0.0, "course_stats": {},
                     }
 
+            # 調教師成績
+            trainer_name = entry.get("trainer_name", "")
+            if trainer_name and trainer_name not in trainer_stats:
+                # 馬プロフィールから trainer_id を取得済みなら使用
+                profile = {}
+                try:
+                    profile = self.netkeiba.get_horse_profile(horse_id)
+                except Exception:
+                    pass
+                trainer_id = profile.get("trainer_id", "")
+                if trainer_id:
+                    try:
+                        stats = self.netkeiba.get_trainer_stats(trainer_id)
+                        stats["trainer_id"] = trainer_id
+                        trainer_stats[trainer_name] = stats
+                    except Exception:
+                        pass
+
         return {
             "races": [race_results.get("race", {})],
             "horses": horses,
             "past_performances": past_performances,
             "jockey_stats": jockey_stats,
-            "trainer_stats": {},
+            "trainer_stats": trainer_stats,
         }
 
     def _build_race_card_from_netkeiba(self, race_id: str) -> dict:
@@ -236,6 +259,7 @@ class ProductionDataSource(DataSource):
                     "gender": profile.get("gender", e.get("gender", "")),
                     "age": profile.get("age", e.get("age", 0)),
                     "trainer_name": e.get("trainer_name", "") or profile.get("trainer_name", ""),
+                    "trainer_id": profile.get("trainer_id", ""),
                     "pedigree_sire": profile.get("pedigree_sire"),
                     "pedigree_dam": profile.get("pedigree_dam"),
                     "pedigree_dam_sire": profile.get("pedigree_dam_sire"),
@@ -336,8 +360,8 @@ class ProductionDataSource(DataSource):
                     "predicted_rank": predicted,
                     "actual_result": actual,
                     "win_odds_favorite": fav_odds,
-                    "win_dividend": 0,
-                    "place_dividend": 0,
+                    "win_dividend": results.get("win_dividend", 0),
+                    "place_dividend": results.get("place_dividend", 0),
                 })
             except Exception:
                 continue

@@ -143,14 +143,14 @@ SAMPLE_HORSE_RESULTS_HTML = """
 <th>日付</th><th>開催</th><th>天気</th><th>R</th><th>レース名</th><th></th><th>頭数</th>
 <th>枠番</th><th>馬番</th><th>オッズ</th><th>人気</th><th>着順</th><th>騎手</th><th>斤量</th>
 <th>距離</th><th></th><th>馬場</th><th></th><th>タイム</th><th>着差</th>
-<th></th><th></th><th></th><th></th><th>通過</th><th>ペース</th><th>上り</th><th>馬体重</th>
+<th></th><th></th><th></th><th></th><th>上がり指数</th><th>通過</th><th>ペース</th><th>上り</th><th>馬体重</th>
 <th></th><th></th><th>勝ち馬</th><th>賞金</th>
 </tr>
 <tr>
 <td>2025/04/12</td><td>3中山6</td><td>晴</td><td>11</td><td>春雷S(L)</td><td></td><td>16</td>
 <td>7</td><td>13</td><td>27.9</td><td>10</td><td>11</td><td>横山琉人</td><td>54</td>
 <td>芝1200</td><td></td><td>良</td><td></td><td>1:08.0</td><td>0.4</td>
-<td></td><td></td><td></td><td></td><td>12-11</td><td></td><td>33.4</td><td>470(+6)</td>
+<td></td><td></td><td></td><td></td><td>99</td><td>12-11</td><td></td><td>33.4</td><td>470(+6)</td>
 <td></td><td></td><td>クラスペディア</td><td></td>
 </tr>
 </table>

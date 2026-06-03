@@ -56,7 +56,51 @@ class NetkeibaScraper(BaseScraper):
             entry = self._parse_result_row(cells, race_id)
             entries.append(entry)
 
-        return {"race": race_info, "entries": entries}
+        # 払い戻し
+        payout = self._parse_payout(soup)
+
+        return {"race": race_info, "entries": entries, **payout}
+
+    def _parse_payout(self, soup: BeautifulSoup) -> dict:
+        """払い戻しセクションから単勝・複勝配当を抽出"""
+        result = {"win_dividend": 0, "place_dividend": 0}
+
+        pay_block = soup.find("dl", class_="pay_block")
+        if not pay_block:
+            return result
+
+        def parse_amount(text: str) -> int:
+            return int(text.replace(",", "").strip()) if text.strip() else 0
+
+        # 単勝
+        tan_th = pay_block.find("th", class_="tan")
+        if tan_th:
+            row = tan_th.find_parent("tr")
+            if row:
+                tds = row.find_all("td")
+                if len(tds) >= 2:
+                    try:
+                        result["win_dividend"] = parse_amount(tds[1].get_text(strip=True))
+                    except ValueError:
+                        pass
+
+        # 複勝（1着馬の配当を代表値として使用）
+        # td内は<br/>区切りで複数の値があるため、get_text(separator)で分割
+        fuku_th = pay_block.find("th", class_="fuku")
+        if fuku_th:
+            row = fuku_th.find_parent("tr")
+            if row:
+                tds = row.find_all("td")
+                if len(tds) >= 2:
+                    amounts = tds[1].get_text(separator="\n").split("\n")
+                    amounts = [a.strip() for a in amounts if a.strip()]
+                    if amounts:
+                        try:
+                            result["place_dividend"] = parse_amount(amounts[0])
+                        except ValueError:
+                            pass
+
+        return result
 
     def _parse_race_header(self, soup: BeautifulSoup, race_id: str) -> dict:
         """race_head div からレース基本情報を抽出"""
@@ -293,8 +337,8 @@ class NetkeibaScraper(BaseScraper):
         カラム順:
         0:日付 1:開催 2:天気 3:R 4:レース名 5:映像 6:頭数
         7:枠番 8:馬番 9:オッズ 10:人気 11:着順 12:騎手 13:斤量
-        14:距離 15:馬場(重量) 16:馬場状態 17:馬場指数 18:タイム
-        19:着差 ... 26:通過 27:ペース 28:上り 29:馬体重 ...
+        14:距離 15:水分量 16:馬場 17:馬場指数 18:タイム
+        19:着差 ... 24:上がり指数 25:通過 26:ペース 27:上り 28:馬体重 ...
         """
         def text(idx: int) -> str:
             return cells[idx].get_text(strip=True) if idx < len(cells) else ""
@@ -326,7 +370,7 @@ class NetkeibaScraper(BaseScraper):
 
         # 上がり
         last_3f = None
-        last_3f_text = text(26)
+        last_3f_text = text(27)
         if last_3f_text:
             try:
                 last_3f = float(last_3f_text)
@@ -334,7 +378,7 @@ class NetkeibaScraper(BaseScraper):
                 pass
 
         # 通過順
-        passing_order = text(24)
+        passing_order = text(25)
 
         # 着順
         finish_pos_text = text(11)
@@ -462,6 +506,14 @@ class NetkeibaScraper(BaseScraper):
         # 調教師
         trainer_text = profile.get("調教師", "")
         trainer_name = re.sub(r"\(.*?\)", "", trainer_text).strip()
+        # 調教師IDをリンクから抽出
+        trainer_id = ""
+        if table:
+            trainer_link = table.find("a", href=re.compile(r"/trainer/\d+"))
+            if trainer_link:
+                m = re.search(r"/trainer/(\d+)", trainer_link.get("href", ""))
+                if m:
+                    trainer_id = m.group(1)
 
         return {
             "horse_id": horse_id,
@@ -470,6 +522,7 @@ class NetkeibaScraper(BaseScraper):
             "gender": gender,
             "age": age if birth_year else 0,
             "trainer_name": trainer_name,
+            "trainer_id": trainer_id,
             "pedigree_sire": "",
             "pedigree_dam_sire": "",
         }
@@ -539,6 +592,63 @@ class NetkeibaScraper(BaseScraper):
         """
         html = self.fetch_page(f"/jockey/result/{jockey_id}/", cache_ttl=86400)
         return self._parse_jockey_stats(html, jockey_id)
+
+    # ------------------------------------------------------------------
+    # 調教師成績
+    # ------------------------------------------------------------------
+
+    def get_trainer_stats(self, trainer_id: str) -> dict:
+        """調教師の年度別成績を取得。
+
+        URL: /trainer/result/{trainer_id}/
+
+        Returns: dict matching trainer_stats contract
+        """
+        html = self.fetch_page(f"/trainer/result/{trainer_id}/", cache_ttl=86400)
+        return self._parse_trainer_stats(html, trainer_id)
+
+    def _parse_trainer_stats(self, html: str, trainer_id: str) -> dict:
+        soup = BeautifulSoup(html, "lxml")
+
+        trainer_name = ""
+        title_el = soup.find("title")
+        if title_el:
+            trainer_name = title_el.get_text(strip=True).split("の")[0].strip()
+
+        table = soup.find("table", class_="race_table_01")
+        if not table:
+            return {"trainer_id": trainer_id, "trainer_name": trainer_name}
+
+        # 当年の成績を取得（年度列が当年または"累計"の行）
+        current_year = str(datetime.now().year)
+        total_runs = 0
+        wins = 0
+        seconds = 0
+        thirds = 0
+
+        for row in table.find_all("tr")[2:]:  # ヘッダー2行をスキップ
+            cells = row.find_all(["th", "td"])
+            if len(cells) < 9:
+                continue
+            year_text = cells[0].get_text(strip=True)
+            if year_text == current_year:
+                wins = int(cells[2].get_text(strip=True).replace(",", "") or 0)
+                seconds = int(cells[4].get_text(strip=True).replace(",", "") or 0)
+                thirds = int(cells[6].get_text(strip=True).replace(",", "") or 0)
+                total_runs = int(cells[8].get_text(strip=True).replace(",", "") or 0)
+                break
+
+        win_rate = round(wins / total_runs, 3) if total_runs > 0 else 0
+        place_rate = round((wins + seconds + thirds) / total_runs, 3) if total_runs > 0 else 0
+
+        return {
+            "trainer_id": trainer_id,
+            "trainer_name": trainer_name,
+            "total_runs": total_runs,
+            "wins": wins,
+            "win_rate": win_rate,
+            "place_rate": place_rate,
+        }
 
     def _parse_jockey_stats(self, html: str, jockey_id: str) -> dict:
         soup = BeautifulSoup(html, "lxml")
