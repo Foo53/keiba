@@ -596,24 +596,46 @@ class NetkeibaScraper(BaseScraper):
     def search_races(self, year: int, month: int) -> list[str]:
         """指定年月のレースID一覧を取得。
 
-        URL: /race/list/{year}/{month:02d}/
+        URL構造: /race/list/{YYYYMM}/ → 開催日一覧
+                 /race/list/{YYYYMMDD}/ → レースID一覧
 
         Returns: list[str] — race_id のリスト
         """
-        html = self.fetch_page(f"/race/list/{year}/{month:02d}/", cache_ttl=86400)
-        return self._parse_race_list(html)
+        month_str = f"{year}{month:02d}"
+        # 月ページ → 開催日一覧
+        html = self.fetch_page(f"/race/list/{month_str}/", cache_ttl=86400)
+        date_ids = self._parse_race_dates(html)
 
-    def _parse_race_list(self, html: str) -> list[str]:
+        race_ids = []
+        for date_id in date_ids:
+            try:
+                day_html = self.fetch_page(f"/race/list/{date_id}/", cache_ttl=86400)
+                day_races = self._parse_race_ids_from_day(day_html)
+                race_ids.extend(day_races)
+            except Exception as e:
+                self.logger.warning(f"Failed to fetch races for {date_id}: {e}")
+                continue
+
+        return race_ids
+
+    def _parse_race_dates(self, html: str) -> list[str]:
+        """月ページから開催日ID一覧を抽出"""
+        soup = BeautifulSoup(html, "lxml")
+        dates = []
+        for a in soup.find_all("a", href=True):
+            match = re.search(r"/race/list/(\d{8})/", a["href"])
+            if match:
+                dates.append(match.group(1))
+        return list(dict.fromkeys(dates))
+
+    def _parse_race_ids_from_day(self, html: str) -> list[str]:
+        """開催日ページからレースID一覧を抽出"""
         soup = BeautifulSoup(html, "lxml")
         race_ids = []
-
         for a in soup.find_all("a", href=True):
-            href = a["href"]
-            match = re.search(r"/race/(\d{12,})/", href)
+            match = re.search(r"/race/(\d{12,})/", a["href"])
             if match:
                 race_ids.append(match.group(1))
-
-        # 重複排除
         return list(dict.fromkeys(race_ids))
 
     # ------------------------------------------------------------------

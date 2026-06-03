@@ -267,12 +267,23 @@ SAMPLE_RACE_LIST_HTML = """
 
 
 class TestSearchRaces:
-    def test_extracts_race_ids(self, scraper):
-        ids = scraper._parse_race_list(SAMPLE_RACE_LIST_HTML)
+    def test_extracts_race_dates(self, scraper):
+        html = """
+        <html><body>
+        <a href="/race/list/20250601/">6/1</a>
+        <a href="/race/list/20250608/">6/8</a>
+        <a href="/race/list/20250601/">dup</a>
+        </body></html>
+        """
+        dates = scraper._parse_race_dates(html)
+        assert dates == ["20250601", "20250608"]
+
+    def test_extracts_race_ids_from_day(self, scraper):
+        ids = scraper._parse_race_ids_from_day(SAMPLE_RACE_LIST_HTML)
         assert ids == ["202506010211", "202506010210"]
 
-    def test_deduplicates(self, scraper):
-        ids = scraper._parse_race_list(SAMPLE_RACE_LIST_HTML)
+    def test_deduplicates_race_ids(self, scraper):
+        ids = scraper._parse_race_ids_from_day(SAMPLE_RACE_LIST_HTML)
         assert ids.count("202506010211") == 1
 
 
