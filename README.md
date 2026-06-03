@@ -37,6 +37,9 @@ keiba
 # レースID指定
 keiba 20260607-Tokyo-11
 
+# 本番データで実行（netkeiba + JRA 統合）
+keiba --source production 20250601-Tokyo-11
+
 # 詳細ログ
 keiba -v
 ```
@@ -82,17 +85,25 @@ src/keiba/
 ├── agents/         # 14エージェント + BaseAgent
 ├── data/
 │   ├── base_source.py      # DataSource ABC
-│   └── sample/             # MVP用サンプルデータ
+│   ├── sample/             # MVP用サンプルデータ
+│   └── production/         # 本番データソース
+│       ├── production_source.py  # ProductionDataSource
+│       ├── merger.py              # データマージ・重複排除
+│       └── scrapers/              # netkeiba / JRA スクレイパ
 ├── orchestration/  # パイプライン管理
-├── utils/          # 設定・ログ
+├── utils/          # 設定・ログ・HTTP クライアント
 └── cli.py          # CLI エントリポイント
 ```
 
 ## 外部アクセスに関する方針
 
-- **MVPでは外部サイトへの実アクセスは行いません。** `SampleDataSource` のみ使用します。
-- 本番実装時は、対象サイトの利用規約・robots.txt・アクセス頻度制限を必ず確認し、過剰アクセスを避けます。
-- データソースは `DataSource` ABC で抽象化されており、`config/default.yaml` の `data_source.active` を変更するだけで差し替え可能です。
+- **本番モード (`--source production`)**: netkeiba.com からデータを取得します
+  - robots.txt を自動確認（許可されたパスのみアクセス）
+  - ドメインごと7秒以上のリクエスト間隔（レート制限）
+  - 1日500リクエスト上限（ドメインごと）
+  - ローカルファイルキャッシュで重複アクセスを防止
+- **サンプルモード（デフォルト）**: 外部サイトへのアクセスなし
+- データソースは `DataSource` ABC で抽象化されており、`config/default.yaml` の `data_source.active` を変更するだけで差し替え可能です
 
 ## 設計ドキュメント
 
