@@ -218,12 +218,63 @@ class TestParseHorseProfile:
         assert profile["horse_id"] == "2020103962"
         assert profile["birth_year"] == 2020
         assert profile["trainer_name"] == "斎藤誠"
-        assert profile["pedigree_sire"] == "ディープインパクト"
+        assert profile["pedigree_sire"] == ""
 
     def test_missing_profile_fields(self, scraper):
         profile = scraper._parse_horse_profile("<html><head><title>テスト馬</title></head></html>", "H001")
         assert profile["horse_id"] == "H001"
         assert profile["trainer_name"] == ""
+
+
+SAMPLE_PEDIGREE_HTML = """
+<html><body>
+<table class="blood_table">
+<tr><td rowspan="16" class="b_ml"><a href="/horse/xxx/">ディープインパクト</a><br/>2002 鹿毛</td>
+    <td rowspan="8" class="b_ml"><a href="/horse/xxx/">サンデーサイレンス</a></td>
+    <td rowspan="4" class="b_ml"><a href="/horse/xxx/">Halo</a></td>
+    <td rowspan="2" class="b_ml"><a href="/horse/xxx/">Hail to Reason</a></td>
+    <td class="b_ml"><a href="/horse/xxx/">Turn-to</a></td></tr>
+<tr><td class="b_fml"><a href="/horse/xxx/">Nocturnal</a></td></tr>
+<tr><td rowspan="2" class="b_fml"><a href="/horse/xxx/">Cosmah</a></td>
+    <td class="b_ml"><a href="/horse/xxx/">Cosmic Bomb</a></td></tr>
+<tr><td class="b_fml"><a href="/horse/xxx/">Banish Fear</a></td></tr>
+<tr><td rowspan="4" class="b_fml"><a href="/horse/xxx/">Wishing Well</a></td>
+    <td rowspan="2" class="b_ml"><a href="/horse/xxx/">Understanding</a></td>
+    <td class="b_ml"><a href="/horse/xxx/">Promised Land</a></td></tr>
+<tr><td class="b_fml"><a href="/horse/xxx/">Pretty Ways</a></td></tr>
+<tr><td rowspan="2" class="b_fml"><a href="/horse/xxx/">Mountain Flower</a></td>
+    <td class="b_ml"><a href="/horse/xxx/">Edenwold</a></td></tr>
+<tr><td class="b_fml"><a href="/horse/xxx/">Naullah</a></td></tr>
+<tr><td rowspan="8" class="b_fml"><a href="/horse/xxx/">アルモネアイ</a></td>
+    <td rowspan="4" class="b_ml"><a href="/horse/xxx/">キングカメハメハ</a></td>
+    <td rowspan="2" class="b_ml"><a href="/horse/xxx/">Kingmambo</a></td>
+    <td class="b_ml"><a href="/horse/xxx/">Mr. Prospector</a></td></tr>
+<tr><td class="b_fml"><a href="/horse/xxx/">Miesque</a></td></tr>
+<tr><td rowspan="2" class="b_fml"><a href="/horse/xxx/">マンファス</a></td>
+    <td class="b_ml"><a href="/horse/xxx/">Last Tycoon</a></td></tr>
+<tr><td class="b_fml"><a href="/horse/xxx/">Pilgrims Way</a></td></tr>
+<tr><td rowspan="4" class="b_fml"><a href="/horse/xxx/">モモタロボー</a></td>
+    <td rowspan="2" class="b_ml"><a href="/horse/xxx/">サクラユタカオー</a></td>
+    <td class="b_ml"><a href="/horse/xxx/">テスコボーイ</a></td></tr>
+<tr><td class="b_fml"><a href="/horse/xxx/">サクラトウコウ</a></td></tr>
+<tr><td rowspan="2" class="b_fml"><a href="/horse/xxx/">モトユタカ</a></td>
+    <td class="b_ml"><a href="/horse/xxx/">ユタカオー</a></td></tr>
+<tr><td class="b_fml"><a href="/horse/xxx/">ミスモトユタカ</a></td></tr>
+</table>
+</body></html>
+"""
+
+
+class TestParsePedigree:
+    def test_parses_sire_and_dam(self, scraper):
+        result = scraper._parse_pedigree(SAMPLE_PEDIGREE_HTML)
+        assert result["pedigree_sire"] == "ディープインパクト"
+        assert result["pedigree_dam"] == "アルモネアイ"
+        assert result["pedigree_dam_sire"] == "キングカメハメハ"
+
+    def test_no_blood_table(self, scraper):
+        result = scraper._parse_pedigree("<html><body></body></html>")
+        assert result == {}
 
 
 # ------------------------------------------------------------------

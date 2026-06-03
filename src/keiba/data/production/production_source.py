@@ -237,6 +237,7 @@ class ProductionDataSource(DataSource):
                     "age": profile.get("age", e.get("age", 0)),
                     "trainer_name": e.get("trainer_name", "") or profile.get("trainer_name", ""),
                     "pedigree_sire": profile.get("pedigree_sire"),
+                    "pedigree_dam": profile.get("pedigree_dam"),
                     "pedigree_dam_sire": profile.get("pedigree_dam_sire"),
                 },
                 "jockey": {

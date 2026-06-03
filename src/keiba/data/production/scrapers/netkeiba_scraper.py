@@ -408,12 +408,23 @@ class NetkeibaScraper(BaseScraper):
     def get_horse_profile(self, horse_id: str) -> dict:
         """馬のプロフィール情報を取得。
 
-        URL: /horse/{horse_id}/
+        URL: /horse/{horse_id}/ (基本情報)
+             /horse/ped/{horse_id}/ (血統)
 
         Returns: dict with horse details
         """
         html = self.fetch_page(f"/horse/{horse_id}/", cache_ttl=86400)
-        return self._parse_horse_profile(html, horse_id)
+        result = self._parse_horse_profile(html, horse_id)
+
+        # 血統は /ped/ ページに別ページとして存在する
+        try:
+            ped_html = self.fetch_page(f"/horse/ped/{horse_id}/", cache_ttl=86400)
+            pedigree = self._parse_pedigree(ped_html)
+            result.update(pedigree)
+        except Exception:
+            pass
+
+        return result
 
     def _parse_horse_profile(self, html: str, horse_id: str) -> dict:
         soup = BeautifulSoup(html, "lxml")
@@ -452,17 +463,6 @@ class NetkeibaScraper(BaseScraper):
         trainer_text = profile.get("調教師", "")
         trainer_name = re.sub(r"\(.*?\)", "", trainer_text).strip()
 
-        # 血統
-        pedigree_sire = ""
-        pedigree_dam_sire = ""
-        blood_table = soup.find("table", class_="blood_table")
-        if blood_table:
-            tds = blood_table.find_all("td")
-            if tds:
-                pedigree_sire = tds[0].get_text(strip=True)
-            if len(tds) > 3:
-                pedigree_dam_sire = tds[3].get_text(strip=True)
-
         return {
             "horse_id": horse_id,
             "horse_name": horse_name,
@@ -470,9 +470,61 @@ class NetkeibaScraper(BaseScraper):
             "gender": gender,
             "age": age if birth_year else 0,
             "trainer_name": trainer_name,
-            "pedigree_sire": pedigree_sire,
-            "pedigree_dam_sire": pedigree_dam_sire,
+            "pedigree_sire": "",
+            "pedigree_dam_sire": "",
         }
+
+    def _parse_pedigree(self, html: str) -> dict:
+        """5代血統表ページ (/horse/ped/{id}/) から父・母・母父を抽出"""
+        soup = BeautifulSoup(html, "lxml")
+        blood_table = soup.find("table", class_="blood_table")
+        if not blood_table:
+            return {}
+
+        first_row = blood_table.find("tr")
+        if not first_row:
+            return {}
+
+        tds = first_row.find_all("td", recursive=False)
+
+        # 父: 1行目1列目 (b_ml, rowspan=16)
+        pedigree_sire = ""
+        if tds:
+            a = tds[0].find("a")
+            pedigree_sire = a.get_text(strip=True) if a else ""
+
+        # 母: b_fml の中で最大 rowspan の td（=血統表の下半分の先頭）
+        # 母父: 母と同じ行の次の td (b_ml)
+        pedigree_dam = ""
+        pedigree_dam_sire = ""
+        dam_td = None
+        max_rowspan = 0
+        for tr in blood_table.find_all("tr"):
+            row_tds = tr.find_all("td", recursive=False)
+            if not row_tds:
+                continue
+            td0 = row_tds[0]
+            if "b_fml" in td0.get("class", []):
+                rs = int(td0.get("rowspan", 0))
+                if rs > max_rowspan:
+                    max_rowspan = rs
+                    dam_td = td0
+                    dam_row_tds = row_tds
+        if dam_td:
+            a = dam_td.find("a")
+            pedigree_dam = a.get_text(strip=True) if a else ""
+            if len(dam_row_tds) > 1:
+                a = dam_row_tds[1].find("a")
+                pedigree_dam_sire = a.get_text(strip=True) if a else ""
+
+        result = {}
+        if pedigree_sire:
+            result["pedigree_sire"] = pedigree_sire
+        if pedigree_dam:
+            result["pedigree_dam"] = pedigree_dam
+        if pedigree_dam_sire:
+            result["pedigree_dam_sire"] = pedigree_dam_sire
+        return result
 
     # ------------------------------------------------------------------
     # 騎手成績
