@@ -8,9 +8,25 @@ data_source:
   sample:
     race_id: "20260607-Tokyo-11"
   production:
-    historical_api: ""
-    current_api: ""
-    web_search_engine: ""
+    http:
+      user_agent: "keiba-prediction/0.1.0 (educational research)"
+      min_interval_seconds: 7
+      daily_request_budget: 500
+      timeout_seconds: 30
+      max_retries: 2
+    cache:
+      directory: "data/store/cache"
+      default_ttl_seconds: 3600
+      ttl_overrides:
+        race_result: 604800
+        odds: 300
+        training_report: 86400
+    netkeiba:
+      enabled: true
+      base_url: "https://db.netkeiba.com"
+    jra:
+      enabled: true
+      base_url: "https://www.jra.go.jp"
 
 logging:
   level: "INFO"

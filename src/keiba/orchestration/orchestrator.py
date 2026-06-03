@@ -31,9 +31,11 @@ class Orchestrator:
             active = self.config.get("data_source", {}).get("active", "sample")
             if active == "sample":
                 self.data_source = SampleDataSource()
+            elif active == "production":
+                from keiba.data.production.production_source import ProductionDataSource
+                self.data_source = ProductionDataSource(self.config)
             else:
-                # 本番実装時はここでproduction sourceを生成
-                self.logger.warning(f"Data source '{active}' not implemented, falling back to sample")
+                self.logger.warning(f"Data source '{active}' not recognized, falling back to sample")
                 self.data_source = SampleDataSource()
 
         self.stages = build_pipeline(self.data_source)
