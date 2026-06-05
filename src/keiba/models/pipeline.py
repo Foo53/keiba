@@ -27,6 +27,7 @@ class PipelineContext(KeibaBaseModel):
     quality_check: Optional[dict] = None
     features: Optional[dict] = None
     analysis: Optional[dict] = None
+    ml_analysis: Optional[dict] = None  # LightGBM分析結果
     web_research: Optional[dict] = None
     evidence: Optional[dict] = None
     predicted_odds_eval: Optional[dict] = None
@@ -34,6 +35,7 @@ class PipelineContext(KeibaBaseModel):
     prediction_predicted: Optional[dict] = None
     prediction_actual: Optional[dict] = None
     backtest: Optional[dict] = None
+    eda_images: Optional[dict] = None
     note_suggestion: Optional[dict] = None
     note_article: Optional[dict] = None
     qa_report: Optional[dict] = None

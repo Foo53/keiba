@@ -66,3 +66,10 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 
 **These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
 
+## 5. Environment
+
+**WSL2 環境の制約に注意。**
+
+- `sudo` が必要な操作（システムパッケージのインストール等）は実行せず、ユーザーにコマンドを提示して手動実行を依頼する。
+- ユーザーが `! <command>` で直接実行することも可能。
+

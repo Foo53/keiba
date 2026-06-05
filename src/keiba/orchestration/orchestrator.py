@@ -142,6 +142,7 @@ class Orchestrator:
         # 該当ステージの出力フィールドをコピー
         field_map = {
             "python_analysis": "analysis",
+            "ml_analysis": "ml_analysis",
             "web_research": "web_research",
         }
         field = field_map.get(stage_name)

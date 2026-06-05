@@ -10,7 +10,7 @@ class TestFullPipeline:
         orch = Orchestrator(data_source=SampleDataSource())
         ctx = orch.run("20260607-Tokyo-11")
         assert ctx.status == "completed"
-        assert len(ctx.agent_results) == 14
+        assert len(ctx.agent_results) == 16
 
     def test_all_outputs_present(self, full_context):
         ctx = full_context
@@ -36,6 +36,15 @@ class TestFullPipeline:
     def test_no_prohibited_words(self, full_context):
         violations = full_context.note_article.get("prohibited_word_violations", [])
         assert violations == []
+
+    def test_eda_images_generated(self, full_context):
+        assert full_context.eda_images is not None
+        assert len(full_context.eda_images) > 0
+
+    def test_markdown_contains_chart_references(self, full_context):
+        if full_context.eda_images:
+            body = full_context.note_article.get("body_markdown", "")
+            assert "![" in body
 
     def test_json_output_saved(self, full_context, tmp_path):
         orch = Orchestrator(data_source=SampleDataSource())

@@ -67,8 +67,38 @@ class EvidenceIntegrator(BaseAgent):
             "horses": horses_evidence,
             "race_narrative": self._write_race_narrative(horses_evidence),
         }
+
+        # ML予測のブレンド
+        self._blend_ml_predictions(context, horses_evidence)
+
         self.logger.info(f"Integrated evidence for {len(horses_evidence)} horses")
         return context
+
+    def _blend_ml_predictions(self, context: PipelineContext, horses_evidence: list[dict]) -> None:
+        """ML予測とルールベース確率をブレンド（CodeWorks Parisの研究に基づく）。"""
+        if not context.ml_analysis or not context.ml_analysis.get("probabilities"):
+            return
+
+        ml_probs = {
+            p["entry_id"]: p["win_probability"]
+            for p in context.ml_analysis["probabilities"]
+        }
+        ml_confidence = context.ml_analysis.get("model_confidence", 0)
+        # モデル信頼度が高い場合はMLを重用、低い場合は控えめに
+        ml_weight = 0.6 if ml_confidence > 0.6 else 0.3
+
+        for he in horses_evidence:
+            rule_prob = he["integrated_probability"]
+            ml_prob = ml_probs.get(he["entry_id"], rule_prob)
+            blended = rule_prob * (1 - ml_weight) + ml_prob * ml_weight
+            he["integrated_probability"] = round(blended, 4)
+            he["ml_contribution"] = round(ml_prob * ml_weight, 4)
+
+        # 再正規化（確率の和を1に）
+        total = sum(h["integrated_probability"] for h in horses_evidence)
+        if total > 0:
+            for h in horses_evidence:
+                h["integrated_probability"] = round(h["integrated_probability"] / total, 4)
 
     def _extract_evidence(self, prob: dict, intel: dict) -> tuple:
         strengths, weaknesses, concerns = [], [], []

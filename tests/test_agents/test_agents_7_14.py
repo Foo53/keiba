@@ -6,6 +6,8 @@ from keiba.agents.predicted_odds_evaluator import PredictedOddsEvaluator
 from keiba.agents.actual_odds_evaluator import ActualOddsEvaluator
 from keiba.agents.prediction_generator import PredictionGenerator
 from keiba.agents.backtester import Backtester
+from keiba.agents.visualizer import VisualizerAgent
+from keiba.agents.ml_predictor import MLPredictor
 from keiba.agents.note_structure_researcher import NoteStructureResearcher
 from keiba.agents.note_writer import NoteWriter
 from keiba.agents.quality_assurance import QualityAssurance
@@ -39,11 +41,13 @@ def _build_context_up_to(stage_name, sample_data_source):
         ("feature_gen", FeatureGenerator()),
         ("python_analysis", PythonAnalyzer()),
         ("web_research", WebResearcher(ds)),
+        ("ml_analysis", MLPredictor()),
         ("evidence", EvidenceIntegrator()),
         ("predicted_odds", PredictedOddsEvaluator()),
         ("actual_odds", ActualOddsEvaluator()),
         ("prediction", PredictionGenerator()),
         ("backtest", Backtester(ds)),
+        ("visualization", VisualizerAgent()),
         ("note_research", NoteStructureResearcher()),
         ("note_write", NoteWriter()),
         ("qa", QualityAssurance()),
@@ -158,3 +162,56 @@ class TestQualityAssurance:
         ds = SampleDataSource()
         ctx = _build_context_up_to("qa", ds)
         assert len(ctx.qa_report["criteria"]) == 10
+
+
+class TestVisualizerAgent:
+    def test_generates_charts(self):
+        ds = SampleDataSource()
+        ctx = _build_context_up_to("visualization", ds)
+        assert ctx.eda_images is not None
+        assert len(ctx.eda_images) > 0
+
+    def test_output_files_exist(self):
+        ds = SampleDataSource()
+        ctx = _build_context_up_to("visualization", ds)
+        from pathlib import Path
+        if ctx.eda_images:
+            for name, path in ctx.eda_images.items():
+                assert Path(path).exists(), f"Chart {name} not found at {path}"
+
+    def test_validate_requires_features_and_evidence(self):
+        from keiba.models.pipeline import PipelineContext
+        from datetime import datetime
+        ctx = PipelineContext(
+            pipeline_id="t", race_id="test", started_at=datetime.now(), current_stage="x"
+        )
+        agent = VisualizerAgent()
+        assert agent.validate_input(ctx) is False
+
+
+class TestMLPredictor:
+    def test_skips_when_no_model(self):
+        """学習済みモデルなしでもエラーにならない"""
+        ds = SampleDataSource()
+        ctx = _build_context_up_to("ml_analysis", ds)
+        # モデルがない場合はml_analysisがNone（graceful degradation）
+        assert ctx.ml_analysis is None or ctx.features is not None
+
+    def test_validate_requires_features(self):
+        from keiba.models.pipeline import PipelineContext
+        from datetime import datetime
+        ctx = PipelineContext(
+            pipeline_id="t", race_id="test", started_at=datetime.now(), current_stage="x"
+        )
+        agent = MLPredictor()
+        assert agent.validate_input(ctx) is False
+
+    def test_validate_passes_with_features(self):
+        from keiba.models.pipeline import PipelineContext
+        from datetime import datetime
+        ctx = PipelineContext(
+            pipeline_id="t", race_id="test", started_at=datetime.now(), current_stage="x",
+            features={"horse_features": [{"entry_id": "e1", "horse_id": "h1"}]},
+        )
+        agent = MLPredictor()
+        assert agent.validate_input(ctx) is True

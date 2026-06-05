@@ -11,7 +11,7 @@ from keiba.utils.logging import setup_logging
 
 def main():
     parser = argparse.ArgumentParser(
-        description="競馬予想システム - 14エージェントパイプライン",
+        description="競馬予想システム - 16エージェントパイプライン",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 使用例:
@@ -20,21 +20,43 @@ def main():
   keiba -v                           詳細ログ付き
   keiba --source sample              サンプルデータで実行
   keiba --source production 202506010211  netkeiba形式IDで本番実行
+  keiba train --source sample        サンプルデータでモデル学習
+  keiba train --source production    本番データでモデル学習
+  keiba train --source jrvan         JRA-VANデータでモデル学習
         """,
     )
-    parser.add_argument(
-        "race_id", nargs="?", default="20260607-Tokyo-11",
-        help="対象レースID (default: 20260607-Tokyo-11)",
-    )
-    parser.add_argument("--config", default=None, help="設定ファイルパス")
-    parser.add_argument(
-        "--source", choices=["sample", "production"], default=None,
-        help="データソース (default: configに従う)",
-    )
-    parser.add_argument("--output-dir", default="output", help="出力ディレクトリ")
-    parser.add_argument("--verbose", "-v", action="store_true", help="詳細ログ")
+    # train サブコマンド（argparse の optional positional + subparser 競合を避けるため
+    # 手動で train を検出してから該当パーサーに振り分ける）
+    if len(sys.argv) > 1 and sys.argv[1] == "train":
+        train_parser = argparse.ArgumentParser(
+            description="LightGBM モデル学習",
+        )
+        train_parser.add_argument("--source", choices=["sample", "production", "jrvan"], default="production",
+                                  help="データソース (default: production)")
+        train_parser.add_argument("--months", type=int, default=12, help="学習データの期間（月）")
+        train_parser.add_argument("--max-races", type=int, default=500, help="最大レース数")
+        train_parser.add_argument("--optuna-trials", type=int, default=100, help="Optuna最適化試行数")
+        train_parser.add_argument("--config", default=None, help="設定ファイルパス")
+        args = train_parser.parse_args(sys.argv[2:])
+        args.command = "train"
+    else:
+        parser.add_argument(
+            "race_id", nargs="?", default="20260607-Tokyo-11",
+            help="対象レースID (default: 20260607-Tokyo-11)",
+        )
+        parser.add_argument("--config", default=None, help="設定ファイルパス")
+        parser.add_argument(
+            "--source", choices=["sample", "production"], default=None,
+            help="データソース (default: configに従う)",
+        )
+        parser.add_argument("--output-dir", default="output", help="出力ディレクトリ")
+        parser.add_argument("--verbose", "-v", action="store_true", help="詳細ログ")
+        args = parser.parse_args()
+        args.command = None
 
-    args = parser.parse_args()
+    # train サブコマンドの処理
+    if args.command == "train":
+        return _run_train(args)
 
     # 設定読込
     try:
@@ -55,7 +77,7 @@ def main():
     setup_logging(config_dict.get("logging", {}))
 
     print("=" * 60)
-    print("🏇 競馬予想システム - 14エージェントパイプライン")
+    print("🏇 競馬予想システム - 16エージェントパイプライン")
     print("=" * 60)
     print(f"対象レース: {args.race_id}")
     print(f"データソース: {config_dict.get('data_source', {}).get('active', 'sample')}")
@@ -131,6 +153,78 @@ def main():
     print("=" * 60)
 
     return 0 if context.status == "completed" else 1
+
+
+def _run_train(args) -> int:
+    """LightGBMモデル学習のエントリポイント"""
+    from keiba.utils.config import load_config
+    from keiba.utils.logging import setup_logging
+
+    try:
+        config = load_config(None)
+    except Exception:
+        config = None
+    config_dict = config.model_dump() if config else {}
+
+    if args.source:
+        config_dict.setdefault("data_source", {})["active"] = args.source
+
+    setup_logging(config_dict.get("logging", {}))
+
+    print("=" * 60)
+    print("🏁 LightGBM モデル学習")
+    print("=" * 60)
+    print(f"データソース: {args.source}")
+    print(f"Optuna試行数: {args.optuna_trials}")
+    print("-" * 60)
+
+    # データソース構築
+    active = args.source
+    if active == "sample":
+        from keiba.data.sample.sample_source import SampleDataSource
+        ds = SampleDataSource()
+    elif active == "jrvan":
+        from keiba.data.jrvan.data_source import JrVanDataSource
+        ds = JrVanDataSource(config_dict)
+    elif active == "production":
+        from keiba.data.production.production_source import ProductionDataSource
+        ds = ProductionDataSource(config_dict)
+    else:
+        from keiba.data.sample.sample_source import SampleDataSource
+        ds = SampleDataSource()
+
+    from keiba.ml.trainer import LightGBMTrainer
+    trainer = LightGBMTrainer(ds, config_dict)
+
+    try:
+        report = trainer.train(
+            months=args.months,
+            max_races=args.max_races,
+            optuna_trials=args.optuna_trials,
+        )
+    except Exception as e:
+        print(f"\n❌ 学習失敗: {e}")
+        return 1
+
+    # 結果表示
+    print()
+    print("=" * 60)
+    print("🏁 LightGBM モデル学習完了")
+    print("=" * 60)
+    print(f"📊 学習サンプル数: {report['train_samples']:,}")
+    print(f"📊 検証サンプル数: {report['val_samples']:,}")
+    print(f"📊 テストサンプル数: {report.get('test_samples', 0):,}")
+    print(f"📈 検証AUC (val): {report['val_auc']:.4f}")
+    print(f"📈 テストAUC (test): {report.get('test_auc', 0):.4f}")
+
+    if report.get("top_features"):
+        print("🔑 上位特徴量 (gain):")
+        for i, feat in enumerate(report["top_features"][:5], 1):
+            print(f"  {i}. {feat['feature']:<30s} ({feat['importance']:.3f})")
+
+    print(f"💾 モデル保存先: data/store/models/lgbm_latest.txt")
+    print("=" * 60)
+    return 0
 
 
 if __name__ == "__main__":
