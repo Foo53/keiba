@@ -126,6 +126,14 @@ usage: keiba [-h] [--config CONFIG] [--source {sample,production}]
 | `--max-races` | 最大レース数 | `500` |
 | `--optuna-trials` | Optuna最適化試行数 | `100` |
 
+#### 対話型リーダー（`keiba lead`）
+
+| オプション | 説明 | デフォルト |
+|-----------|------|-----------|
+| `race_id` | 対象レースID（位置引数） | `20260607-Tokyo-11` |
+| `--source` | データソース（`sample` / `production`） | 設定ファイルに従う |
+| `--verbose, -v` | 詳細ログ出力 | オフ |
+
 ### 実行例
 
 ```bash
@@ -149,6 +157,12 @@ keiba train --source jrvan --optuna-trials 50
 
 # サンプルデータで学習（動作確認用）
 keiba train --source sample --optuna-trials 10
+
+# 対話型リーダーを起動
+keiba lead
+
+# レースID指定でリーダー起動
+keiba lead 20260607-Tokyo-11
 ```
 
 ### 画面出力の構成
@@ -1288,6 +1302,43 @@ keiba train --source sample --optuna-trials 10
 # 出力:
 #   output/yasuda_kinen_2026.json — 予測結果JSON
 #   output/note_yasuda_kinen_2026.md — Note記事
+```
+
+### パターン9: 対話型リーダーで段階的に作業する
+
+```bash
+# リーダーを起動
+keiba lead
+
+# メニューが表示されるので番号を選択:
+#   [1] 完全予想パイプライン  — 全16エージェント一括実行
+#   [2] データ取得            — Agent 1-3（過去データ＋出馬表＋品質確認）
+#   [3] 特徴量生成            — Agent 4（18項目の特徴量生成）
+#   [4] 分析                  — Agent 5-8（統計/ML/Web→根拠統合）
+#   [5] オッズ評価            — Agent 9-10（予想/実オッズで期待値計算）
+#   [6] 予想生成              — Agent 11-12（買い目生成＋バックテスト）
+#   [7] 記事生成              — Agent 13-16（チャート→記事→品質確認）
+#   [8] ML学習                — LightGBMモデルの学習
+#   [s] 現在の状況確認        — 進捗テーブル表示
+#   [r] レース変更            — レースID変更・状態リセット
+#   [q] 終了
+
+# 例: 段階的に実行
+# 1. まず [2] でデータを取得
+# 2. [s] で状況確認
+# 3. [4] で分析
+# 4. [5] でオッズ評価
+# 5. [6] で予想生成
+# 6. [s] で最終確認
+
+# 前提チェック機能:
+# 未完了の前提ステージがある場合、自動的に検出して確認プロンプトを表示:
+#   ⚠️ 「分析」には以下のステージが未完了です:
+#     • historical_data
+#     • current_data
+#     • quality_check
+#     • feature_gen
+#   先に実行しますか？ [y/n]:
 ```
 
 ---

@@ -1,6 +1,6 @@
 # 競馬予想システム — 全体設計・実装計画
 
-> 中央競馬の重賞・メインレース（G1/G2/G3、土日11R）向けの予想システムを、14のエージェントで構成するパイプラインとして実装する。
+> 中央競馬の重賞・メインレース（G1/G2/G3、土日11R）向けの予想システムを、16のエージェントで構成するパイプラインとして実装する。
 > まずはサンプルデータで動くMVPを作り、後から本番データ取得に差し替えられる設計にする。
 
 ---
@@ -29,7 +29,7 @@
 | 方針 | 内容 |
 |------|------|
 | **言語・FW** | Python 3.11+ / Pydantic v2 で型安全なデータモデル |
-| **パイプラインパターン** | 14エージェントが `PipelineContext`（共有状態）を読み書きしながら直列・並列実行 |
+| **パイプラインパターン** | 16エージェントが `PipelineContext`（共有状態）を読み書きしながら直列・並列実行 |
 | **データソース抽象化** | `DataSource` ABC を挟み、MVPは `SampleDataSource`、本番は `NetkeibaSource` 等に差し替え |
 | **外部アクセス制約** | **MVPでは外部サイトへの実アクセス禁止。SampleDataSourceのみで動作確認。** 本番実装時は対象サイトの利用規約・robots.txt・アクセス頻度制限を必ず確認し、過剰アクセスを避けること。 |
 | **QAゲート付きリトライ** | 品質保証エージェントが100点未満なら該当エージェントへ差し戻し（最大3回） |
@@ -80,7 +80,7 @@ keiba/
 │       │   ├── quality.py                  # QAReport, QACriterion
 │       │   └── pipeline.py                 # PipelineContext, AgentResult
 │       │
-│       ├── agents/                         # 14エージェント
+│       ├── agents/                         # 16エージェント
 │       │   ├── __init__.py
 │       │   ├── base.py                     # BaseAgent 抽象クラス
 │       │   ├── historical_data_manager.py  # 1.  過去データ管理
@@ -88,15 +88,17 @@ keiba/
 │       │   ├── data_quality_checker.py     # 3.  データ品質チェック
 │       │   ├── feature_generator.py        # 4.  特徴量生成
 │       │   ├── python_analyzer.py          # 5.  Python分析
-│       │   ├── web_researcher.py           # 6.  Web調査
-│       │   ├── evidence_integrator.py      # 7.  根拠統合
-│       │   ├── predicted_odds_evaluator.py # 8.  予想オッズ評価
-│       │   ├── actual_odds_evaluator.py    # 9.  実オッズ評価
-│       │   ├── prediction_generator.py     # 10. 予想生成
-│       │   ├── backtester.py               # 11. バックテスト
-│       │   ├── note_structure_researcher.py# 12. Note構成調査
-│       │   ├── note_writer.py              # 13. Note作成
-│       │   └── quality_assurance.py        # 14. 品質保証
+│       │   ├── ml_predictor.py             # 6.  ML予測（LightGBM）
+│       │   ├── web_researcher.py           # 7.  Web調査
+│       │   ├── evidence_integrator.py      # 8.  根拠統合
+│       │   ├── predicted_odds_evaluator.py # 9.  予想オッズ評価
+│       │   ├── actual_odds_evaluator.py    # 10. 実オッズ評価
+│       │   ├── prediction_generator.py     # 11. 予想生成
+│       │   ├── backtester.py               # 12. バックテスト
+│       │   ├── visualizer.py               # 13. EDA可視化チャート
+│       │   ├── note_structure_researcher.py# 14. Note構成調査
+│       │   ├── note_writer.py              # 15. Note作成
+│       │   └── quality_assurance.py        # 16. 品質保証
 │       │
 │       ├── data/                           # データソース（差し替え可能）
 │       │   ├── __init__.py
@@ -109,15 +111,24 @@ keiba/
 │       │   │   ├── past_performances.py    # サンプル過去成績
 │       │   │   ├── odds.py                 # 予想オッズ + 実オッズ
 │       │   │   └── web_content.py          # サンプルWeb調査内容
-│       │   └── production/                 # 将来用（スタブ）
-│       │       ├── __init__.py
-│       │       ├── netkeiba_source.py      # netkeiba スクレイパー（スタブ）
-│       │       └── jra_source.py           # JRA公式データ（スタブ）
+│       │   ├── production/                 # 本番データソース
+│       │   │   ├── __init__.py
+│       │   │   ├── production_source.py    # ProductionDataSource
+│       │   │   ├── merger.py              # データマージ・重複排除
+│       │   │   └── scrapers/              # netkeiba / JRA スクレイパ
+│       │   └── jrvan/                      # JRA-VAN DataLab
+│       │       ├── loader.py              # CSV→SQLite変換・DB管理
+│       │       └── data_source.py          # JrVanDataSource 実装
 │       │
 │       ├── orchestration/                  # パイプライン管理
 │       │   ├── __init__.py
 │       │   ├── orchestrator.py             # メインオーケストレータ
-│       │   └── pipeline.py                 # ステージ定義・依存関係
+│       │   ├── pipeline.py                 # ステージ定義・依存関係
+│       │   └── leader.py                   # 対話型リーダーエージェント
+│       │
+│       ├── ml/                             # 機械学習
+│       │   ├── trainer.py                  # LightGBM学習（Optuna最適化）
+│       │   └── feature_vectorizer.py       # 特徴量→25次元ベクトル変換
 │       │
 │       └── utils/
 │           ├── __init__.py
@@ -173,26 +184,28 @@ keiba/
        ↓
 [4. 特徴量生成]
        ↓
-  ┌────┴────┐
-  ↓         ↓
-[5. Python分析]  [6. Web調査]     ← 並列実行
-  └────┬────┘
+  ┌────┼────┐
+  ↓    ↓    ↓
+[5. Python分析] [6. ML予測] [7. Web調査]  ← 並列実行（3エージェント）
+  └────┼────┘
        ↓
-[7. 根拠統合]
+[8. 根拠統合]
        ↓
-[8. 予想オッズ評価] ← 暫定評価として出力
+[9. 予想オッズ評価] ← 暫定評価として出力
        ↓
-[9. 実オッズ評価]   ← 実オッズで再評価
+[10. 実オッズ評価]   ← 実オッズで再評価
        ↓
-[10. 予想生成] → 買い目 or 見送り
+[11. 予想生成] → 買い目 or 見送り
        ↓
-[11. バックテスト]
+[12. バックテスト]
        ↓
-[12. Note構成調査]
+[13. EDA可視化]
        ↓
-[13. Note作成]
+[14. Note構成調査]
        ↓
-[14. 品質保証] → 100点以上なら完了 / 未満なら該当エージェントへ差し戻し
+[15. Note作成]
+       ↓
+[16. 品質保証] → 100点以上なら完了 / 未満なら該当エージェントへ差し戻し
 ```
 
 ### 差し戻しルール
@@ -202,13 +215,13 @@ keiba/
 | データ品質に問題 | [1] 過去データ管理 / [2] 当日データ取得 / [3] 品質チェック |
 | 特徴量に問題 | [4] 特徴量生成 |
 | 分析根拠が弱い | [5] Python分析 |
-| Web調査が弱い | [6] Web調査 |
-| 根拠整理が弱い | [7] 根拠統合 |
-| オッズ評価が弱い | [8] 予想オッズ評価 / [9] 実オッズ評価 |
-| 買い目が多すぎる | [10] 予想生成 |
-| バックテスト結果が弱い | [11] バックテスト |
-| Noteの説得力が弱い | [13] Note作成 |
-| 誇大表現がある | [13] Note作成 |
+| Web調査が弱い | [7] Web調査 |
+| 根拠整理が弱い | [8] 根拠統合 |
+| オッズ評価が弱い | [9] 予想オッズ評価 / [10] 実オッズ評価 |
+| 買い目が多すぎる | [11] 予想生成 |
+| バックテスト結果が弱い | [12] バックテスト |
+| Noteの説得力が弱い | [15] Note作成 |
+| 誇大表現がある | [15] Note作成 |
 
 ---
 
@@ -263,7 +276,19 @@ keiba/
 | **書込フィールド** | `context.analysis` |
 | **備考** | MVPでは純統計手法。データ蓄積後にML切替可能。 |
 
-### 6. Web調査エージェント (WebResearcher)
+### 6. ML予測エージェント (MLPredictor)
+
+| 項目 | 内容 |
+|------|------|
+| **役割** | 学習済みLightGBMモデル（25次元特徴量）で各馬の勝率を推定する。モデル未学習時はスキップ（graceful degradation）。 |
+| **分析内容** | LightGBMスコア→softmax正規化、特徴量重要度（gain ベース上位10件） |
+| **入力** | features |
+| **出力** | MLAnalysisResult（確率推定・特徴量重要度・モデルバージョン・信頼度） |
+| **書込フィールド** | `context.ml_analysis` |
+| **並列グループ** | `parallel_1`（PythonAnalyzer, WebResearcher と並列実行） |
+| **備考** | モデルファイル: `data/store/models/lgbm_latest.txt`。`keiba train --source jrvan` で事前学習が必要。 |
+
+### 7. Web調査エージェント (WebResearcher)
 
 | 項目 | 内容 |
 |------|------|
@@ -274,17 +299,17 @@ keiba/
 | **書込フィールド** | `context.web_research` |
 | **注意** | Web情報は補助情報。データ分析結果より過度に優先しない。SNS・個人予想は信頼度低め。 |
 
-### 7. 根拠統合エージェント (EvidenceIntegrator)
+### 8. 根拠統合エージェント (EvidenceIntegrator)
 
 | 項目 | 内容 |
 |------|------|
 | **役割** | Python分析結果とWeb調査結果を統合する。各馬の強み・弱み・不安要素を整理する。データ根拠と調査根拠を分けて記録する。 |
-| **入力** | analysis + web_research |
+| **入力** | analysis + ml_analysis + web_research |
 | **出力** | EvidenceProfile（馬ごとの総合評価・強み・弱み・不安要素・買える理由・消し材料・根拠一覧） |
 | **書込フィールド** | `context.evidence` |
 | **調整幅** | Web証拠は確率を最大 ±15% まで調整可能 |
 
-### 8. 予想オッズ評価エージェント (PredictedOddsEvaluator)
+### 9. 予想オッズ評価エージェント (PredictedOddsEvaluator)
 
 | 項目 | 内容 |
 |------|------|
@@ -294,7 +319,7 @@ keiba/
 | **書込フィールド** | `context.predicted_odds_eval` |
 | **注意** | 必ず「暫定評価」「実オッズ取得後に再評価が必要」と明記する。 |
 
-### 9. 実オッズ評価エージェント (ActualOddsEvaluator)
+### 10. 実オッズ評価エージェント (ActualOddsEvaluator)
 
 | 項目 | 内容 |
 |------|------|
@@ -303,7 +328,7 @@ keiba/
 | **出力** | 実オッズ評価（期待値・市場確率・モデル推定確率・妙味判定・推奨度 S/A/B/C・見送り判定・予想オッズからの変更点） |
 | **書込フィールド** | `context.actual_odds_eval` |
 
-### 10. 予想生成エージェント (PredictionGenerator)
+### 11. 予想生成エージェント (PredictionGenerator)
 
 | 項目 | 内容 |
 |------|------|
@@ -314,7 +339,7 @@ keiba/
 | **書込フィールド** | `context.prediction_predicted`, `context.prediction_actual` |
 | **注意** | 買い目を出しすぎない。3連単は根拠が弱ければ見送り。信頼度低なら「買わない」判断。 |
 
-### 11. バックテストエージェント (Backtester)
+### 12. バックテストエージェント (Backtester)
 
 | 項目 | 内容 |
 |------|------|
@@ -323,7 +348,17 @@ keiba/
 | **出力** | BacktestSummary（的中率・回収率・単勝/複勝/ワイド/馬連回収率・券種別/競馬場別/距離別/馬場別/人気別成績・改善提案） |
 | **書込フィールド** | `context.backtest` |
 
-### 12. Note構成調査エージェント (NoteStructureResearcher)
+### 13. EDA可視化エージェント (VisualizerAgent)
+
+| 項目 | 内容 |
+|------|------|
+| **役割** | 分析結果のEDAチャートを画像ファイルとして生成する。matplotlib/seabornを使用。 |
+| **入力** | features, evidence, actual_odds_eval, backtest |
+| **出力** | EDAイメージ（5種のチャートファイルパス: 勝率ランキング・特徴量比較・EV散布図・バックテスト・近走ヒートマップ） |
+| **書込フィールド** | `context.eda_images` |
+| **出力先** | `output/eda/{race_id}/` にPNG形式で保存 |
+
+### 14. Note構成調査エージェント (NoteStructureResearcher)
 
 | 項目 | 内容 |
 |------|------|
@@ -332,7 +367,7 @@ keiba/
 | **出力** | NoteSuggestion（売れている構成パターン・タイトル案・見出し案・読者導線・NG表現一覧・採用/回避すべき表現） |
 | **書込フィールド** | `context.note_suggestion` |
 
-### 13. Note作成エージェント (NoteWriter)
+### 15. Note作成エージェント (NoteWriter)
 
 | 項目 | 内容 |
 |------|------|
@@ -342,7 +377,7 @@ keiba/
 | **書込フィールド** | `context.note_article` |
 | **禁止表現** | 絶対当たる, 確定, 鉄板, 必ず儲かる, 回収保証, これだけ買えば勝てる |
 
-### 14. 品質保証エージェント (QualityAssurance)
+### 16. 品質保証エージェント (QualityAssurance)
 
 | 項目 | 内容 |
 |------|------|
@@ -651,6 +686,7 @@ class PipelineContext:
     quality_check: dict | None
     features: FeatureSet | None
     analysis: AnalysisResult | None
+    ml_analysis: MLAnalysisResult | None
     web_research: WebResearchResult | None
     evidence: EvidenceProfile | None
     predicted_odds_eval: dict | None
@@ -658,6 +694,7 @@ class PipelineContext:
     prediction_predicted: RacePrediction | None
     prediction_actual: RacePrediction | None
     backtest: BacktestSummary | None
+    eda_images: dict | None
     note_suggestion: NoteSuggestion | None
     note_article: NoteArticle | None
     qa_report: QAReport | None
@@ -718,23 +755,25 @@ PIPELINE_STAGES = [
     Stage(CurrentDataFetcher,      "current_data",       ["historical_data"]),
     Stage(DataQualityChecker,      "quality_check",      ["current_data"]),
     Stage(FeatureGenerator,        "feature_gen",        ["quality_check"]),
-    Stage(PythonAnalyzer,          "python_analysis",    ["feature_gen"],     parallel="group_1"),
-    Stage(WebResearcher,           "web_research",       ["current_data"],    parallel="group_1"),
-    Stage(EvidenceIntegrator,      "evidence",           ["python_analysis", "web_research"]),
+    Stage(PythonAnalyzer,          "python_analysis",    ["feature_gen"],     parallel="parallel_1"),
+    Stage(MLPredictor,             "ml_analysis",        ["feature_gen"],     parallel="parallel_1"),
+    Stage(WebResearcher,           "web_research",       ["current_data"],    parallel="parallel_1"),
+    Stage(EvidenceIntegrator,      "evidence",           ["python_analysis", "ml_analysis", "web_research"]),
     Stage(PredictedOddsEvaluator,  "predicted_odds",     ["evidence"]),
     Stage(ActualOddsEvaluator,     "actual_odds",        ["predicted_odds"]),
     Stage(PredictionGenerator,     "prediction",         ["actual_odds"]),
     Stage(Backtester,              "backtest",           ["prediction"]),
+    Stage(VisualizerAgent,         "visualization",      ["backtest"]),
     Stage(NoteStructureResearcher, "note_research",      ["prediction"]),
-    Stage(NoteWriter,              "note_write",         ["note_research"]),
+    Stage(NoteWriter,              "note_write",         ["note_research", "visualization"]),
     Stage(QualityAssurance,        "qa",                 ["note_write"]),
 ]
 ```
 
 ### 並列実行
 
-- Agent 5 (PythonAnalyzer) と Agent 6 (WebResearcher) は `concurrent.futures.ThreadPoolExecutor` で並列実行
-- 両方完了後に Agent 7 (EvidenceIntegrator) が統合
+- Agent 5 (PythonAnalyzer)、Agent 6 (MLPredictor)、Agent 7 (WebResearcher) は `concurrent.futures.ThreadPoolExecutor` で並列実行
+- 3つ全て完了後に Agent 8 (EvidenceIntegrator) が統合
 
 ### QA差し戻しロジック
 
@@ -824,6 +863,13 @@ keiba -v
 # データソース指定（本番実装後）
 keiba --source production 20260614-Nakayama-11
 
+# 対話型リーダー（ワークフローを段階的に実行）
+keiba lead
+keiba lead 20260607-Tokyo-11
+
+# MLモデル学習
+keiba train --source jrvan --optuna-trials 50
+
 # テスト
 pytest
 
@@ -844,6 +890,9 @@ ruff check src/ tests/ --fix
 | pydantic >= 2.0 | データモデル・バリデーション |
 | pyyaml >= 6.0 | 設定ファイル読込 |
 | rich >= 13.0 | コンソール出力の整形 |
+| lightgbm >= 4.0 | ML予測（LightGBMモデル） |
+| optuna | ハイパーパラメータ最適化 |
+| matplotlib / seaborn | EDA可視化チャート生成 |
 | pytest >= 7.0 | テスト（dev） |
 | pytest-cov >= 4.0 | カバレッジ（dev） |
 | ruff >= 0.1 | Lint（dev） |
@@ -885,16 +934,19 @@ ruff check src/ tests/ --fix
 
 ### MVPで動くもの
 
-- ✅ 全14エージェント稼働
-- ✅ 特徴量生成
+- ✅ 全16エージェント稼働
+- ✅ 特徴量生成（18項目）
 - ✅ スコアリング・勝率推定
+- ✅ LightGBM ML予測（25次元特徴量、JRA-VAN 27年分学習済み）
 - ✅ 暫定期待値評価（予想オッズ）
 - ✅ 実オッズ期待値評価
 - ✅ 買い目生成（券種別）
 - ✅ 見送り判定
 - ✅ バックテスト（簡易版）
+- ✅ EDA可視化チャート（5種）
 - ✅ Note記事案生成
 - ✅ QA採点
+- ✅ 対話型リーダーエージェント（`keiba lead`）
 - ✅ テストコード
 
 ---
@@ -928,13 +980,13 @@ data_source:
 
 | 拡張 | 内容 |
 |------|------|
-| 本番データ取得 | netkeiba / JRA公式 からのスクレイピング |
-| 機械学習モデル | XGBoost / LightGBM による勝率推定 |
+| 本番データ取得 | netkeiba / JRA公式 からのスクレイピング（ProductionDataSource 実装済み） |
+| 機械学習モデル | LightGBM + Optuna による勝率推定（実装済み。検証AUC=0.8332、テストAUC=0.7707） |
 | Web検索API | Google/Bing API によるリアルタイム調査 |
 | リアルタイムオッズ | JRA IPAT からのオッズ取得 |
 | 地方競馬対応 | DataSouce の追加実装 |
 | 全レース対応 | 対象レースのフィルタリング拡張 |
-| 可視化ダッシュボード | 分析結果のグラフ・チャート |
+| 可視化ダッシュボード | EDA可視化チャート5種（実装済み）、ダッシュボード化は将来 |
 
 ---
 
@@ -961,30 +1013,39 @@ data_source:
 11. Agent 3: DataQualityChecker + テスト
 12. Agent 4: FeatureGenerator + テスト
 13. Agent 5: PythonAnalyzer + テスト
-14. Agent 6: WebResearcher + テスト
+14. Agent 6: MLPredictor + テスト
+15. Agent 7: WebResearcher + テスト
 
 ### Phase 4: エージェント実装（後半）
 
-15. Agent 7: EvidenceIntegrator + テスト
-16. Agent 8: PredictedOddsEvaluator + テスト
-17. Agent 9: ActualOddsEvaluator + テスト
-18. Agent 10: PredictionGenerator + テスト
-19. Agent 11: Backtester + テスト
-20. Agent 12: NoteStructureResearcher + テスト
-21. Agent 13: NoteWriter + テスト
-22. Agent 14: QualityAssurance + テスト
+16. Agent 8: EvidenceIntegrator + テスト
+17. Agent 9: PredictedOddsEvaluator + テスト
+18. Agent 10: ActualOddsEvaluator + テスト
+19. Agent 11: PredictionGenerator + テスト
+20. Agent 12: Backtester + テスト
+21. Agent 13: VisualizerAgent + テスト
+22. Agent 14: NoteStructureResearcher + テスト
+23. Agent 15: NoteWriter + テスト
+24. Agent 16: QualityAssurance + テスト
 
-### Phase 5: オーケストレーション
+### Phase 5: ML・データ層拡張
 
-23. `orchestration/pipeline.py` — ステージ定義
-24. `orchestration/orchestrator.py` — 実行エンジン
-25. `cli.py` — CLI エントリポイント
+25. `ml/trainer.py` — LightGBM + Optuna 学習
+26. `ml/feature_vectorizer.py` — 25次元特徴量ベクトル化
+27. `data/jrvan/` — JRA-VAN DataLab CSV→SQLite
 
-### Phase 6: 統合テスト
+### Phase 6: オーケストレーション
 
-26. `tests/conftest.py` — 共通フィクスチャ
-27. `tests/test_integration/test_full_pipeline.py` — E2Eテスト
-28. `README.md` — 使い方説明
+28. `orchestration/pipeline.py` — ステージ定義
+29. `orchestration/orchestrator.py` — 実行エンジン
+30. `orchestration/leader.py` — 対話型リーダーエージェント
+31. `cli.py` — CLI エントリポイント（lead/train サブコマンド含む）
+
+### Phase 7: 統合テスト
+
+32. `tests/conftest.py` — 共通フィクスチャ
+33. `tests/test_integration/test_full_pipeline.py` — E2Eテスト
+34. `README.md` — 使い方説明
 
 ---
 
@@ -1007,12 +1068,14 @@ data_source:
 | DataQualityChecker | 欠損検出・異常検出（休み明け）・正常データ通過 |
 | FeatureGenerator | 全特徴量が有効範囲・脚質分類正しい・上がり順位正しい |
 | PythonAnalyzer | 確率合計≈1.0・全確率>0・順位整合性 |
+| MLPredictor | モデルなし時graceful skip・モデルあり時softmax正規化・25次元ベクトル化 |
 | WebResearcher | 全10頭の情報返却・コース傾向あり |
 | EvidenceIntegrator | 確率調整±15%以内・収束信号検出 |
 | PredictedOddsEvaluator | 暫定マークあり・妙味計算正しい |
 | ActualOddsEvaluator | Grade S/A/B/C 妥当・市場比較あり |
 | PredictionGenerator | 各券種予想生成・低信頼度時見送り・免責事項あり |
 | Backtester | ROI計算正しい・券種別内訳あり |
+| VisualizerAgent | 5種チャート生成・個別失敗時も他チャート生成・PNG出力 |
 | NoteStructureResearcher | 有効な構成返却・タイトル案あり |
 | NoteWriter | 全セクション含む・禁止語なし・免責事項あり |
 | QualityAssurance | 120点満点・禁止語検出・正しい差し戻し先 |
