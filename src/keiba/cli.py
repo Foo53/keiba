@@ -23,6 +23,8 @@ def main():
   keiba train --source sample        サンプルデータでモデル学習
   keiba train --source production    本番データでモデル学習
   keiba train --source jrvan         JRA-VANデータでモデル学習
+  keiba lead                         対話型リーダーを起動
+  keiba lead 20260607-Tokyo-11       レースID指定でリーダー起動
         """,
     )
     # train サブコマンド（argparse の optional positional + subparser 競合を避けるため
@@ -39,6 +41,18 @@ def main():
         train_parser.add_argument("--config", default=None, help="設定ファイルパス")
         args = train_parser.parse_args(sys.argv[2:])
         args.command = "train"
+    elif len(sys.argv) > 1 and sys.argv[1] == "lead":
+        lead_parser = argparse.ArgumentParser(
+            description="対話型リーダーエージェント",
+        )
+        lead_parser.add_argument("race_id", nargs="?", default="20260607-Tokyo-11",
+                                  help="対象レースID (default: 20260607-Tokyo-11)")
+        lead_parser.add_argument("--config", default=None, help="設定ファイルパス")
+        lead_parser.add_argument("--source", choices=["sample", "production"], default=None,
+                                  help="データソース (default: configに従う)")
+        lead_parser.add_argument("--verbose", "-v", action="store_true", help="詳細ログ")
+        args = lead_parser.parse_args(sys.argv[2:])
+        args.command = "lead"
     else:
         parser.add_argument(
             "race_id", nargs="?", default="20260607-Tokyo-11",
@@ -57,6 +71,10 @@ def main():
     # train サブコマンドの処理
     if args.command == "train":
         return _run_train(args)
+
+    # lead サブコマンドの処理
+    if args.command == "lead":
+        return _run_lead(args)
 
     # 設定読込
     try:
@@ -153,6 +171,46 @@ def main():
     print("=" * 60)
 
     return 0 if context.status == "completed" else 1
+
+
+def _run_lead(args) -> int:
+    """対話型リーダーエージェントのエントリポイント"""
+    from keiba.orchestration.leader import LeaderAgent
+
+    # 設定読込
+    try:
+        config = load_config(args.config)
+    except Exception as e:
+        print(f"⚠️ 設定読込エラー: {e}。デフォルト設定で続行します。")
+        config = None
+
+    config_dict = config.model_dump() if config else {}
+
+    # オーバーライド
+    if args.source:
+        config_dict.setdefault("data_source", {})["active"] = args.source
+    if args.verbose:
+        config_dict.setdefault("logging", {})["level"] = "DEBUG"
+
+    # ログ初期化
+    setup_logging(config_dict.get("logging", {}))
+
+    # データソース構築
+    active = config_dict.get("data_source", {}).get("active", "sample")
+    if active == "sample":
+        from keiba.data.sample.sample_source import SampleDataSource
+        ds = SampleDataSource()
+    elif active == "production":
+        from keiba.data.production.production_source import ProductionDataSource
+        ds = ProductionDataSource(config_dict)
+    else:
+        from keiba.data.sample.sample_source import SampleDataSource
+        ds = SampleDataSource()
+
+    # リーダー起動
+    leader = LeaderAgent(config=config_dict, data_source=ds, race_id=args.race_id)
+    leader.run()
+    return 0
 
 
 def _run_train(args) -> int:

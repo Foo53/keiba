@@ -16,3 +16,4 @@ data/store/
 .env
 venv/
 .venv/
+JRA_VAN_DATA
