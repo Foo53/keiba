@@ -1,6 +1,7 @@
 """Web調査結果モデル"""
 
-from datetime import date, datetime
+from datetime import date as date_type
+from datetime import datetime
 from typing import Optional
 
 from keiba.models.base import KeibaBaseModel
@@ -11,7 +12,7 @@ class NewsItem(KeibaBaseModel):
     title: str
     content: str
     relevance: float
-    date: Optional[date] = None
+    news_date: Optional[date_type] = None
     url: Optional[str] = None
 
 
