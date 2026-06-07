@@ -144,7 +144,8 @@ class TestNoteWriter:
     def test_risk_warning_present(self):
         ds = SampleDataSource()
         ctx = _build_context_up_to("note_write", ds)
-        assert "自己責任" in ctx.note_article.get("risk_warning", "")
+        # risk_warningにJRA-VAN免責、bodyに自己責任が含まれる
+        assert "自己責任" in ctx.note_article.get("body_markdown", "")
 
 
 class TestQualityAssurance:

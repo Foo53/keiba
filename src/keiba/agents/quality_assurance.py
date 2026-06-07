@@ -1,11 +1,14 @@
-"""エージェント14: 品質保証"""
+"""エージェント16: 品質保証
+
+全成果物を120点満点で採点する。
+禁止表現リストは models.note.PROHIBITED_WORDS に一元管理。
+"""
 
 from datetime import datetime
 
 from keiba.agents.base import BaseAgent
+from keiba.models.note import PROHIBITED_WORDS, JRAVAN_ATTRIBUTION
 from keiba.models.pipeline import PipelineContext
-
-PROHIBITED_WORDS = ["絶対", "確定", "鉄板", "必ず儲かる", "回収保証", "100%", "間違いなく", "間違いない", "これだけ買えば勝てる"]
 
 
 class QualityAssurance(BaseAgent):
@@ -53,9 +56,9 @@ class QualityAssurance(BaseAgent):
         score, note = self._check_prohibited_words(context)
         criteria.append(self._criterion("誇大表現の排除", 10, score, note))
 
-        # 10. リスク説明 (10点)
-        score, note = self._check_risk_disclosure(context)
-        criteria.append(self._criterion("リスク説明", 10, score, note))
+        # 10. リスク説明・出典表記 (10点)
+        score, note = self._check_risk_and_attribution(context)
+        criteria.append(self._criterion("リスク説明・出典表記", 10, score, note))
 
         total = sum(c["actual_score"] for c in criteria)
         passed = total >= 100
@@ -170,16 +173,37 @@ class QualityAssurance(BaseAgent):
             return 10, "禁止表現なし"
         return 0, f"禁止表現検出: {', '.join(violations)}"
 
-    def _check_risk_disclosure(self, ctx) -> tuple[int, str]:
+    def _check_risk_and_attribution(self, ctx) -> tuple[int, str]:
+        """リスク説明とJRA-VAN出典表記をチェック"""
         note = ctx.note_article or {}
         body = note.get("body_markdown", "")
+
+        # リスクマーカー
         risk_markers = ["自己責任", "免責", "保証するものではありません", "リスク"]
-        found = sum(1 for m in risk_markers if m in body)
-        if found >= 3:
-            return 10, f"リスク説明十分（{found}箇所）"
-        elif found >= 1:
-            return 6, f"リスク説明あり（{found}箇所）"
-        return 2, "リスク説明不足"
+        risk_found = sum(1 for m in risk_markers if m in body)
+
+        # 出典表記チェック
+        has_attribution = JRAVAN_ATTRIBUTION in body or "JRA-VAN" in body
+
+        score = 0
+        notes = []
+
+        if risk_found >= 3:
+            score += 7
+            notes.append(f"リスク説明十分（{risk_found}箇所）")
+        elif risk_found >= 1:
+            score += 4
+            notes.append(f"リスク説明あり（{risk_found}箇所）")
+        else:
+            notes.append("リスク説明不足")
+
+        if has_attribution:
+            score += 3
+            notes.append("出典表記あり")
+        else:
+            notes.append("出典表記なし")
+
+        return score, " / ".join(notes)
 
     def _determine_route_back(self, criteria: list[dict]) -> str:
         failed = [c for c in criteria if not c["passed"]]
@@ -197,7 +221,7 @@ class QualityAssurance(BaseAgent):
             "券種別予想の妥当性": "prediction_generator",
             "Noteの読みやすさ": "note_writer",
             "誇大表現の排除": "note_writer",
-            "リスク説明": "note_writer",
+            "リスク説明・出典表記": "note_writer",
         }
         return routing.get(name, "python_analyzer")
 

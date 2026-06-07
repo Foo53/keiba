@@ -41,10 +41,17 @@ class TestFullPipeline:
         assert full_context.eda_images is not None
         assert len(full_context.eda_images) > 0
 
-    def test_markdown_contains_chart_references(self, full_context):
-        if full_context.eda_images:
-            body = full_context.note_article.get("body_markdown", "")
-            assert "![" in body
+    def test_markdown_note_structure(self, full_context):
+        """新構成: 無料/有料境界・免責事項・買い条件が含まれる"""
+        body = full_context.note_article.get("body_markdown", "")
+        # 無料部分のティザー
+        assert "有料部分で公開する内容" in body
+        # 免責事項
+        assert "自己責任" in body
+        # JRA-VAN注記
+        assert "JRA-VAN" in body
+        # 買い条件セクション
+        assert "買い条件" in body
 
     def test_json_output_saved(self, full_context, tmp_path):
         orch = Orchestrator(data_source=SampleDataSource())
