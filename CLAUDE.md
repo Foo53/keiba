@@ -66,8 +66,8 @@ pytest                             # テスト実行
 | 11 | PredictionGenerator | 統合確率とEVに基づき、単勝/複勝/馬連/3連単の買い目を生成。全EV < -0.3なら見送り推奨 |
 | 12 | Backtester | DataSource経由で過去レースを取得し、予想ロジックの的中率・ROIをコース/距離/馬場別に検証 |
 | 13 | VisualizerAgent | matplotlib/seabornで5種のEDAチャート（勝率ランキング・特徴量比較・EV散布図等）をPNG生成 |
-| 14 | NoteStructureResearcher | レース情報からNote記事の構成（タイトル・9セクション・禁止表現リスト）を提案 |
-| 15 | NoteWriter | 予想結果をMarkdown記事に構築。禁止表現9種を自動検出。VisualizerAgentのチャートパスも参照 |
+| 14 | NoteStructureResearcher | レース情報からNote記事の構成（無料/有料境界・18セクション・禁止表現リスト）を提案 |
+| 15 | NoteWriter | 予想結果をMarkdown記事に構築。無料5セクション＋有料13セクション。禁止表現17種を自動検出 |
 | 16 | QualityAssurance | 全成果物を10項目・120点満点で採点。100点未満なら該当エージェントに差し戻し（最大3回リトライ） |
 
 ---
