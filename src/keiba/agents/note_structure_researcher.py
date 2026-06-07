@@ -23,7 +23,7 @@ class NoteStructureResearcher(BaseAgent):
         year = race_date[:4] if race_date else ""
 
         context.note_suggestion = {
-            "suggested_title": f"【{race_name}{year}】JRA-VANデータ×機械学習で導いた期待値◎｜危険な人気馬と勝負買い目",
+            "suggested_title": f"【{race_name}{year}】機械学習モデルが導いた期待値◎｜危険な人気馬と勝負買い目",
             "structure": [
                 # 無料部分
                 "この記事で分かること（テイザー）",

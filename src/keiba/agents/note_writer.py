@@ -145,7 +145,7 @@ class NoteWriter(BaseAgent):
     # ── 無料部分: ヘッダー ──
 
     def _section_free_header(self, race_name, year):
-        return f"# 【{race_name}{year}】JRA-VANデータ×機械学習で導いた期待値◎｜危険な人気馬と勝負買い目"
+        return f"# 【{race_name}{year}】機械学習モデルが導いた期待値◎｜危険な人気馬と勝負買い目"
 
     # ── 無料部分: この記事で分かること ──
 
@@ -211,7 +211,7 @@ class NoteWriter(BaseAgent):
         return (
             "## モデルの考え方\n\n"
             "筆者がJRA-VAN Data Labの過去データをもとに独自に構築した機械学習モデル（LightGBM）を使用しています。"
-            "モデルは各馬の過去成績やコース適性などを学習し、勝率を推定しています。\n\n"
+            "モデルは各馬の近走内容やコース適性などをもとに、独自の評価スコアを算出しています。\n\n"
             "モデルが重視しているのは**近走内容・騎手・コース適性・脚質**など複数の要素。"
             "総合的に評価し、期待値の高い馬を抽出しています。"
         )
