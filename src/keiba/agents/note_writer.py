@@ -186,22 +186,21 @@ class NoteWriter(BaseAgent):
 
         lines = [
             "## 今年のレースの見立て\n",
-            f"逃げ馬{n_front}頭・先行{n_stalker}頭・差し{n_mid}頭・追込{n_closer}頭という構成。",
+            "今年は前に行きたい馬が複数おり、道中のペースが読みづらい構成です。",
         ]
 
         if n_front >= 2:
             lines.append(
-                "逃げ・先行勢が多く、展開次第で前残りと差し決着の両方がある難解なレースです。"
+                "展開次第で前残りと差し決着の両方がある難解なレース。"
                 "ただし、今年は単純な人気順ではなく、**展開とオッズ妙味を重視したい**。"
             )
         elif n_front == 0:
             lines.append(
-                "逃げ馬不在でペースが上がりにくい。先行勢が有利な展開が予想されます。"
+                "前が空きやすく、先行勢が有利な展開が予想されます。"
             )
         else:
             lines.append(
-                "逃げ馬1頭でペースをコントロールできる展開。"
-                "ただし、差し・追込勢にもチャンスはあります。"
+                "ペースメーカーが1頭で、後方勢にもチャンスはありそうです。"
             )
 
         return "\n".join(lines)
@@ -213,8 +212,8 @@ class NoteWriter(BaseAgent):
             "## モデルの考え方\n\n"
             "筆者がJRA-VAN Data Labの過去データをもとに独自に構築した機械学習モデル（LightGBM）を使用しています。"
             "モデルは各馬の過去成績やコース適性などを学習し、勝率を推定しています。\n\n"
-            "モデルが重視しているのは**前走着順**と**騎手の実績**。"
-            "直近の好走歴がある馬と、トップジョッキーの組み合わせを高く評価する傾向があります。"
+            "モデルが重視しているのは**近走内容・騎手・コース適性・脚質**など複数の要素。"
+            "総合的に評価し、期待値の高い馬を抽出しています。"
         )
 
     # ── 無料部分: ティザー ──
@@ -225,7 +224,7 @@ class NoteWriter(BaseAgent):
             "ここから先では以下を公開します：\n\n"
             "- モデル評価ランキング（S/A/B評価＋妙味ランク）\n"
             "- **◎本命馬**とその理由・買い条件\n"
-            "- ○対抗、▲単穴、☆穴馬の深掘り分析\n"
+            "- ○対抗、▲単穴、☆評価馬の深掘り分析\n"
             "- **危険な人気馬**（人気先行で期待値が下がる馬）\n"
             "- **消し馬**（今回は評価を下げる馬）\n"
             "- 当日オッズ別の**買い／見送り条件**\n"
@@ -359,13 +358,13 @@ class NoteWriter(BaseAgent):
 
         return "\n".join(lines)
 
-    # ── 有料部分: 穴馬 ──
+    # ── 有料部分: 評価馬 ──
 
     def _section_paid_dark_horse(self, horse, entry_map, web_intel, context):
         if not horse:
             return ""
-        section = self._section_paid_pick("☆穴馬", horse, entry_map, web_intel, context)
-        # 穴馬には人気注意を追加
+        section = self._section_paid_pick("☆評価馬", horse, entry_map, web_intel, context)
+        # 人気馬評価には注意書きを追加
         if section:
             section += "\n\n**⚠️ 人気過熱に注意:** オッズが下がりすぎると期待値がマイナスに転じる可能性があります。"
         return section
@@ -528,7 +527,7 @@ class NoteWriter(BaseAgent):
 
         trifecta = pred.get("trifecta_prediction")
         if trifecta:
-            allocation.append(("3連複", "高配当狙い", "1,000円（各少額）"))
+            allocation.append(("3連複フォーメーション", "高配当狙い", "900円（各100円×9点）"))
 
         for item, category, amount in allocation:
             lines.append(f"| {item} | {category} | {amount} |")
@@ -586,7 +585,7 @@ class NoteWriter(BaseAgent):
             return "実績と安定感で対抗評価"
         elif mark_label == "▲単穴":
             if strengths:
-                return strengths[0].get("description", "オッズ妙味に注目の穴馬")
+                return strengths[0].get("description", "オッズ妙味に注目の評価馬")
             return "オッズ妙味に注目の単穴"
         else:
             return "人気薄で一発の可能性を秘める"
