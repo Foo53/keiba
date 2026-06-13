@@ -503,6 +503,12 @@ def main():
     out_path = out_dir / f"note_{date_part}_{race_key}.md"
     out_path.write_text(body, encoding="utf-8")
 
+    # 予測に使用した情報（PipelineContext全体）を保存。
+    # レース後の反省レポートで evidence/web_research 等を比較するために保持する。
+    context_path = out_dir / f"{race_key}_context.json"
+    context_path.write_text(context.model_dump_json(indent=2), encoding="utf-8")
+    print(f"💾 context保存: {context_path}", flush=True)
+
     print(f"\n✅ 記事保存: {out_path}", flush=True)
     print(f"   文字数: {len(body)}", flush=True)
     print(f"   禁止表現違反: {len(violations)}" + (f" ({violations})" if violations else ""), flush=True)

@@ -39,8 +39,13 @@ class PostRaceAnalyst(BaseAgent):
         prediction_data: dict,
         note_markdown: str,
         race_results: dict,
+        context_data: dict | None = None,
     ) -> str:
-        """予測と結果を比較し、反省レポート（Markdown）を返す。"""
+        """予測と結果を比較し、反省レポート（Markdown）を返す。
+
+        context_data を渡すと、予測時に保持した evidence（強み/懸念/グレード）
+        や web_research を比較対象に加え、根拠検証セクションを出力する。
+        """
         predictions = self._load_predictions(prediction_data)
         model_info = prediction_data.get("model_info", {})
         picks = self._parse_note_picks(note_markdown)
@@ -61,6 +66,17 @@ class PostRaceAnalyst(BaseAgent):
         )
         improvements = self._generate_improvements(comparison, five_axis)
 
+        # 予測時に保持した context の evidence/web_research を結果と照合
+        evidence_analysis = None
+        web_analysis = None
+        if context_data:
+            evidence = context_data.get("evidence") or {}
+            web_research = context_data.get("web_research") or {}
+            if evidence.get("horses"):
+                evidence_analysis = self._evidence_analysis(evidence, finish_map)
+            if web_research:
+                web_analysis = self._web_research_analysis(web_research, race_results)
+
         return self._build_report(
             race_id=race_id,
             race_info=race_info,
@@ -73,6 +89,8 @@ class PostRaceAnalyst(BaseAgent):
             qualitative=qualitative,
             five_axis=five_axis,
             improvements=improvements,
+            evidence_analysis=evidence_analysis,
+            web_analysis=web_analysis,
         )
 
     # ---- 結果取得 ----
@@ -570,6 +588,96 @@ class PostRaceAnalyst(BaseAgent):
 
     # ---- レポート生成 ----
 
+    def _evidence_analysis(self, evidence: dict, finish_map: dict) -> dict:
+        """evidence（強み/懸念/グレード）をレース結果と照合する。
+
+        予測時の評価グレード（S/A/B/C）や脚質予想が、結果でどう裏切られたか
+        （または裏付けられたか）を集計する。反省レポートの根拠検証に使用。
+        """
+        horses = evidence.get("horses", [])
+        grade_stats: dict[str, dict] = {}
+        high_grade_misses = []
+        low_grade_hits = []
+        style_matches = 0
+        style_total = 0
+
+        for h in horses:
+            # entry_id（例: "{race_id}_{umaban:02d}"）から馬番を抽出
+            try:
+                umaban = int(str(h.get("entry_id", "")).split("_")[-1])
+            except (ValueError, IndexError):
+                continue
+            result = finish_map.get(umaban)
+            if not result:
+                continue
+            finish = result.get("finish_position", 0)
+            if finish <= 0:  # 除外・失格などは集計外
+                continue
+
+            grade = h.get("evidence_grade", "C")
+            stats = grade_stats.setdefault(
+                grade, {"count": 0, "finish_sum": 0, "in_top3": 0}
+            )
+            stats["count"] += 1
+            stats["finish_sum"] += finish
+            if finish <= 3:
+                stats["in_top3"] += 1
+
+            if grade in ("S", "A") and finish > 5:
+                high_grade_misses.append({
+                    "name": h.get("horse_name", "?"),
+                    "umaban": umaban,
+                    "grade": grade,
+                    "finish": finish,
+                })
+            if grade == "C" and finish <= 3:
+                low_grade_hits.append({
+                    "name": h.get("horse_name", "?"),
+                    "umaban": umaban,
+                    "grade": grade,
+                    "finish": finish,
+                })
+
+            style = h.get("style", "")
+            actual_style = result.get("running_style", "")
+            if style and actual_style:
+                style_total += 1
+                if style == actual_style:
+                    style_matches += 1
+
+        grade_summary = []
+        for grade in ["S", "A", "B", "C"]:
+            s = grade_stats.get(grade)
+            if s and s["count"]:
+                grade_summary.append({
+                    "grade": grade,
+                    "count": s["count"],
+                    "avg_finish": s["finish_sum"] / s["count"],
+                    "in_top3_rate": s["in_top3"] / s["count"],
+                })
+
+        return {
+            "grade_summary": grade_summary,
+            "high_grade_misses": high_grade_misses,
+            "low_grade_hits": low_grade_hits,
+            "style_match_rate": (style_matches / style_total) if style_total else None,
+        }
+
+    def _web_research_analysis(self, web_research: dict, race_results: dict) -> dict:
+        """web_research（気象・調教・ニュース）を簡易評価する。
+
+        現状の予測経路では調教/ニュースは簡易取得のため、過度な当否評価は
+        行わず、予測時に保持していた参考情報を要約して記録する。
+        """
+        wf = web_research.get("weather_forecast") or {}
+        horse_intel = web_research.get("horse_intel") or []
+        return {
+            "has_weather": bool(wf),
+            "weather": wf.get("weather", ""),
+            "track_condition": wf.get("track_condition", ""),
+            "intel_count": len(horse_intel),
+        }
+
     def _build_report(
         self,
         race_id: str,
@@ -583,6 +691,8 @@ class PostRaceAnalyst(BaseAgent):
         qualitative: dict,
         five_axis: list[dict],
         improvements: list[dict],
+        evidence_analysis: dict | None = None,
+        web_analysis: dict | None = None,
     ) -> str:
         lines = []
 
@@ -702,6 +812,67 @@ class PostRaceAnalyst(BaseAgent):
             hits = comparison.get("bet_hits", 0)
             total = comparison.get("bet_total", 0)
             lines.append(f"\n的中率: **{hits}/{total}** ({hits/total:.0%})" if total else "")
+            lines.append("")
+
+        # 根拠（evidence）の検証
+        if evidence_analysis:
+            lines.append("## 根拠（evidence）の検証")
+            lines.append("")
+            lines.append("予測時の評価グレード（S/A/B/C）と実際の着順を照合しました。")
+            lines.append("")
+            gs = evidence_analysis.get("grade_summary", [])
+            if gs:
+                lines.append("| グレード | 頭数 | 平均着順 | 3着内率 |")
+                lines.append("|------|------|--------|------|")
+                for g in gs:
+                    lines.append(
+                        f"| {g['grade']} | {g['count']} "
+                        f"| {g['avg_finish']:.1f}着 | {g['in_top3_rate']:.0%} |"
+                    )
+                lines.append("")
+
+            hgm = evidence_analysis.get("high_grade_misses", [])
+            if hgm:
+                lines.append("**高評価馬の大敗（S/A評価で6着以下）:**")
+                for m in hgm:
+                    lines.append(
+                        f"- {m['name']}（{m['umaban']}番・{m['grade']}評価）→ {m['finish']}着"
+                    )
+                lines.append("")
+
+            lgh = evidence_analysis.get("low_grade_hits", [])
+            if lgh:
+                lines.append("**低評価馬の激走（C評価で3着内）:**")
+                for m in lgh:
+                    lines.append(
+                        f"- {m['name']}（{m['umaban']}番・{m['grade']}評価）→ {m['finish']}着"
+                    )
+                lines.append("")
+
+            smr = evidence_analysis.get("style_match_rate")
+            if smr is not None:
+                lines.append(f"脚質予想の的中率: **{smr:.0%}**")
+                lines.append("")
+
+        # Web情報の検証
+        if web_analysis:
+            lines.append("## Web情報の検証")
+            lines.append("")
+            if web_analysis.get("has_weather"):
+                w = web_analysis.get("weather", "不明")
+                tc = web_analysis.get("track_condition", "")
+                tc_text = f"・馬場{tc}" if tc else ""
+                lines.append(f"- 予測時の天気予想: {w}{tc_text}")
+            else:
+                lines.append("- 予測時に気象情報なし")
+            lines.append(
+                f"- 出走馬のWeb情報（調教・ニュース）: {web_analysis.get('intel_count', 0)}件"
+            )
+            lines.append("")
+            lines.append(
+                "*Web情報は予測時の参考情報です。今回の経路では調教・ニュースは簡易取得のため、"
+                "詳細な当否評価は次段階（フルパイプライン化）で実施します。*"
+            )
             lines.append("")
 
         # 的中した点

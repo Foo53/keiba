@@ -32,6 +32,7 @@ def main():
     parser.add_argument("--note", required=True, help="Note記事Markdownパス")
     parser.add_argument("--output-dir", required=True, help="出力ディレクトリ")
     parser.add_argument("--results", default=None, help="事前取得済みレース結果JSON（未指定時はnetkeibaから取得）")
+    parser.add_argument("--context", default=None, help="予測時に保持したPipelineContext JSON（*_context.json）。指定時はevidence/web比較セクションを出力")
     args = parser.parse_args()
 
     # 予測データ読み込み
@@ -67,6 +68,13 @@ def main():
     entries = race_results.get("entries", [])
     print(f"   エントリ数: {len(entries)}頭")
 
+    # 予測時に保持した context（evidence/web_research 等）を読み込み
+    context_data = None
+    if args.context:
+        print(f"📂 context読み込み: {args.context}")
+        with open(args.context, encoding="utf-8") as f:
+            context_data = json.load(f)
+
     # 分析実行
     print("📊 分析実行中...")
     report = analyst.analyze(
@@ -74,6 +82,7 @@ def main():
         prediction_data=prediction_data,
         note_markdown=note_markdown,
         race_results=race_results,
+        context_data=context_data,
     )
 
     # レポート保存
