@@ -801,6 +801,157 @@ class NetkeibaScraper(BaseScraper):
         return list(dict.fromkeys(race_ids))
 
     # ------------------------------------------------------------------
+    # 調教インテリジェンス推定
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def derive_training_intelligence(past_performances: list[dict]) -> dict:
+        """過去成績から調教に相当するインテリジェンスを推定。
+
+        プレミアム限定の調教タイムが取得できないため、
+        自由にアクセス可能な過去成績データから馬の状態を推定する。
+
+        Args:
+            past_performances: get_horse_past_performances() の返り値（近走順）
+
+        Returns:
+            dict: training_reports, notable_factors, form_trend, fitness_score
+        """
+        if not past_performances:
+            return {
+                "training_reports": [],
+                "notable_factors": [],
+                "form_trend": "stable",
+                "fitness_score": 0.5,
+            }
+
+        recent = past_performances[:5]  # 直近5走を分析
+        reports = []
+        factors = []
+
+        # 1. 上がり3F推移（近3走）
+        f3_values = []
+        for r in recent[:3]:
+            val = r.get("last_3f")
+            if val is not None and val > 0:
+                f3_values.append(val)
+
+        if len(f3_values) >= 2:
+            # past_performances[0] が直近。f3値が小さい（速い）ほど良い
+            trend_3f = f3_values[0] - f3_values[-1]  # 負=改善（直近が速い）
+            arrow = "→".join(f"{v:.1f}" for v in f3_values)
+            if trend_3f < -0.3:
+                reports.append(f"上がり3F推移: {arrow}（改善傾向）")
+                factors.append("上がり3F改善傾向")
+            elif trend_3f > 0.3:
+                reports.append(f"上がり3F推移: {arrow}（低下傾向）")
+                factors.append("上がり3F低下注意")
+            else:
+                reports.append(f"上がり3F推移: {arrow}（安定）")
+
+        # 2. 着順推移（近3走）
+        positions = []
+        for r in recent[:3]:
+            pos = r.get("finish_position", 0)
+            if pos > 0:
+                positions.append(pos)
+
+        if len(positions) >= 2:
+            pos_arrow = "→".join(str(p) for p in positions)
+            # past_performances[0] が直近。着順が小さいほど良い
+            if positions[0] < positions[-1] - 1:
+                reports.append(f"着順推移: {pos_arrow}（上昇傾向）")
+                factors.append("近走成績上昇中")
+            elif positions[0] > positions[-1] + 1:
+                reports.append(f"着順推移: {pos_arrow}（下降傾向）")
+                factors.append("近走成績下降傾向")
+            else:
+                reports.append(f"着順推移: {pos_arrow}（安定）")
+
+        # 3. 馬体重推移（近3走）— past_performancesには含まれない場合あり
+        # weight_change を recent から取得（存在すれば）
+        weight_changes = []
+        for r in recent[:3]:
+            wc = r.get("weight_change")
+            if wc is not None:
+                weight_changes.append(wc)
+
+        if weight_changes:
+            total_change = sum(weight_changes)
+            if total_change > 6:
+                reports.append(f"馬体重推移: 近3走で+{total_change:.0f}kg（増加傾向・注意）")
+                factors.append("馬体重大幅増加")
+            elif total_change < -6:
+                reports.append(f"馬体重推移: 近3走で{total_change:.0f}kg（減少傾向・注意）")
+                factors.append("馬体重大幅減少")
+            else:
+                reports.append(f"馬体重推移: 近3走で{total_change:+.0f}kg（安定）")
+
+        # 4. レース間隔
+        if len(recent) >= 2:
+            date1 = recent[0].get("race_date", "")
+            date2 = recent[1].get("race_date", "")
+            if date1 and date2:
+                try:
+                    from datetime import date
+                    parts1 = date1.split("-")
+                    parts2 = date2.split("-")
+                    if len(parts1) == 3 and len(parts2) == 3:
+                        d1 = date(int(parts1[0]), int(parts1[1]), int(parts1[2]))
+                        d2 = date(int(parts2[0]), int(parts2[1]), int(parts2[2]))
+                        gap = (d1 - d2).days
+                        if gap <= 14:
+                            reports.append(f"レース間隔: 前走から中{gap}日（詰め寄り）")
+                            factors.append("短い間隔での連闘")
+                        elif gap >= 42:
+                            reports.append(f"レース間隔: 前走から中{gap}日（間隔空く）")
+                            factors.append("久々の出走")
+                        else:
+                            reports.append(f"レース間隔: 前走から中{gap}日（標準）")
+                except (ValueError, IndexError):
+                    pass
+
+        # 5. 人気と着順の差（近3走平均）
+        pop_pos_diffs = []
+        for r in recent[:3]:
+            pop = r.get("popularity", 0)
+            pos = r.get("finish_position", 0)
+            if pop > 0 and pos > 0:
+                pop_pos_diffs.append(pop - pos)  # 正=人気以上、負=人気以下
+
+        if pop_pos_diffs:
+            avg_diff = sum(pop_pos_diffs) / len(pop_pos_diffs)
+            if avg_diff >= 2.0:
+                factors.append("人気以上の好走傾向")
+            elif avg_diff <= -2.0:
+                factors.append("人気以下の成績傾向")
+
+        # form_trend と fitness_score の算出
+        positive_count = sum(1 for f in factors if any(
+            w in f for w in ["改善", "上昇", "人気以上"]
+        ))
+        negative_count = sum(1 for f in factors if any(
+            w in f for w in ["低下", "下降", "注意", "大幅", "久々", "連闘"]
+        ))
+
+        if positive_count >= 2 and negative_count == 0:
+            form_trend = "improving"
+            fitness_score = min(0.9, 0.5 + positive_count * 0.15)
+        elif negative_count >= 2 and positive_count == 0:
+            form_trend = "declining"
+            fitness_score = max(0.1, 0.5 - negative_count * 0.15)
+        else:
+            form_trend = "stable"
+            fitness_score = 0.5
+
+        return {
+            "training_reports": reports,
+            "notable_factors": factors,
+            "form_trend": form_trend,
+            "fitness_score": round(fitness_score, 2),
+        }
+
+    # ------------------------------------------------------------------
     # ヘルスチェック
     # ------------------------------------------------------------------
 

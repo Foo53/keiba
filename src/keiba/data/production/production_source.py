@@ -6,6 +6,7 @@ DataMerger で統合・重複排除して DataSource ABC に適合させる。
 """
 
 import logging
+import xml.etree.ElementTree as ET
 from datetime import datetime
 
 from keiba.data.base_source import DataSource
@@ -17,6 +18,13 @@ from keiba.data.production.merger import DataMerger
 from keiba.data.production.scrapers.netkeiba_scraper import NetkeibaScraper
 from keiba.data.production.scrapers.jra_scraper import JraScraper
 from keiba.utils.http_client import RateLimitedHttpClient
+
+# 競馬場 → 気象庁地域コード
+COURSE_TO_AREA = {
+    "東京": "130000", "中山": "120000", "京都": "260000",
+    "阪神": "280000", "中京": "230000", "福島": "070000",
+    "新潟": "150000", "小倉": "400000", "札幌": "011000", "函館": "017000",
+}
 
 
 class ProductionDataSource(DataSource):
@@ -117,7 +125,7 @@ class ProductionDataSource(DataSource):
         return self._format_odds(nk_odds, race_id, is_provisional=False)
 
     def get_web_content(self, race_id: str, horse_ids: list[str]) -> dict:
-        """Web コンテンツ取得（調教情報等）。"""
+        """Web コンテンツ取得（調教情報・天気・ニュース）。"""
         self.logger.info(f"Fetching web content for {race_id}, {len(horse_ids)} horses")
 
         content = {
@@ -126,7 +134,27 @@ class ProductionDataSource(DataSource):
             "horse_intel": [],
         }
 
+        # レース情報（course/date）を取得して天気・ニュースに使う
+        race_info = self._get_race_info_for_web(race_id)
+        course = race_info.get("course", "")
+        race_date = race_info.get("race_date", "")
+
+        # 天気予報
+        weather_cfg = (
+            self.config.get("data_source", {})
+            .get("production", {})
+            .get("weather", {})
+        )
+        if weather_cfg.get("enabled", True) and course:
+            weather = self._fetch_with_fallback(
+                lambda c=course, d=race_date: self._fetch_weather_forecast(c, d),
+                "weather",
+            )
+            if weather:
+                content["weather_forecast"] = weather
+
         # 各馬の情報を取得
+        horse_names = []
         for horse_id in horse_ids:
             intel = self._fetch_with_fallback(
                 lambda hid=horse_id: self._build_horse_intel(hid),
@@ -134,6 +162,24 @@ class ProductionDataSource(DataSource):
             )
             if intel:
                 content["horse_intel"].append(intel)
+                if intel.get("horse_name"):
+                    horse_names.append(intel["horse_name"])
+
+        # ニュース取得
+        news_cfg = (
+            self.config.get("data_source", {})
+            .get("production", {})
+            .get("news", {})
+        )
+        if news_cfg.get("enabled", True) and horse_names:
+            news = self._fetch_with_fallback(
+                lambda names=horse_names: self._fetch_race_news(names),
+                "news",
+            )
+            if news:
+                content["related_news"] = news
+                # 各馬のintelにニュースを紐付け
+                self._attach_news_to_horses(content["horse_intel"], news)
 
         return content
 
@@ -283,37 +329,206 @@ class ProductionDataSource(DataSource):
         }
 
     def _build_horse_intel(self, horse_id: str) -> dict:
-        """馬のWeb情報を構築"""
+        """馬のWeb情報を構築（調教推定込み）"""
         # プロフィールから基本情報
         try:
             profile = self.netkeiba.get_horse_profile(horse_id)
         except Exception:
             profile = {"horse_id": horse_id, "horse_name": ""}
 
-        # 過去成績から notable_factors を生成
-        factors = []
+        # 過去成績から調教インテリジェンスを推定
+        training_reports = []
+        notable_factors = []
+        form_trend = "stable"
+        fitness_score = 0.5
+
         try:
             pp = self.netkeiba.get_horse_past_performances(horse_id)
             if pp:
+                # 前走の簡易評価
                 last = pp[0]
                 pos = last.get("finish_position", 0)
                 if pos == 1:
-                    factors.append("前走1着・好調")
+                    notable_factors.append("前走1着・好調")
                 elif pos <= 3:
-                    factors.append(f"前走{pos}着・安定感あり")
+                    notable_factors.append(f"前走{pos}着・安定感あり")
                 elif pos > 10:
-                    factors.append(f"前走{pos}着・要注意")
+                    notable_factors.append(f"前走{pos}着・要注意")
+
+                # 調教インテリジェンス推定
+                ti_cfg = (
+                    self.config.get("data_source", {})
+                    .get("production", {})
+                    .get("training_intelligence", {})
+                )
+                if ti_cfg.get("enabled", True):
+                    intel = NetkeibaScraper.derive_training_intelligence(pp)
+                    training_reports = intel["training_reports"]
+                    notable_factors.extend(intel["notable_factors"])
+                    form_trend = intel["form_trend"]
+                    fitness_score = intel["fitness_score"]
         except Exception:
             pass
 
         return {
             "horse_id": horse_id,
             "horse_name": profile.get("horse_name", ""),
-            "training_reports": [],
+            "training_reports": training_reports,
             "connections_comments": [],
             "news_items": [],
-            "notable_factors": factors,
+            "notable_factors": notable_factors,
+            "form_trend": form_trend,
+            "fitness_score": fitness_score,
         }
+
+    def _get_race_info_for_web(self, race_id: str) -> dict:
+        """race_id からコース・日付を取得（天気・ニュース用）。キャッシュ済みなら高速。"""
+        try:
+            results = self.netkeiba.get_race_results(race_id)
+            race = results.get("race", {})
+            return {
+                "course": race.get("course", ""),
+                "race_date": race.get("race_date", ""),
+                "track_type": race.get("track_type", "芝"),
+            }
+        except Exception:
+            return {}
+
+    def _fetch_weather_forecast(self, course: str, race_date: str) -> dict | None:
+        """気象庁JSON APIから天気予報を取得。"""
+        area_code = COURSE_TO_AREA.get(course)
+        if not area_code:
+            return None
+
+        try:
+            cache_ttl = (
+                self.config.get("data_source", {})
+                .get("production", {})
+                .get("weather", {})
+                .get("cache_ttl", 1800)
+            )
+            url = f"https://www.jma.go.jp/bosai/forecast/data/forecast/{area_code}.json"
+            response = self.http_client.get(url, cache_ttl=cache_ttl)
+            data = response.json()
+
+            # 最初のエリアの今日/明日の予報を取得
+            areas = data[0].get("timeSeries", [{}])
+            if not areas:
+                return None
+
+            series = areas[0]
+            time_defines = series.get("timeDefines", [])
+            weathers = series.get("areas", [{}])[0].get("weathers", [])
+
+            if not weathers:
+                return None
+
+            weather_text = weathers[0] if weathers else ""
+
+            # 気温は areas[1] の temps にある場合が多い
+            temperature = None
+            if len(data) > 0 and len(areas) > 1:
+                temp_series = areas[1]
+                temp_areas = temp_series.get("areas", [{}])
+                if temp_areas:
+                    temps = temp_areas[0].get("temps", [])
+                    if temps:
+                        try:
+                            temperature = int(temps[0])
+                        except (ValueError, IndexError):
+                            pass
+
+            # 降水確率
+            rain_probability = None
+            pops = series.get("areas", [{}])[0].get("pops", [])
+            if pops:
+                try:
+                    rain_probability = int(pops[0])
+                except (ValueError, IndexError):
+                    pass
+
+            return {
+                "weather": weather_text,
+                "temperature": temperature,
+                "rain_probability": rain_probability,
+                "source": "jma",
+            }
+        except Exception as e:
+            self.logger.warning(f"Weather fetch failed for {course}: {e}")
+            return None
+
+    def _fetch_race_news(self, horse_names: list[str]) -> list[dict]:
+        """netkeiba RSS から馬名関連ニュースを取得。"""
+        news_cfg = (
+            self.config.get("data_source", {})
+            .get("production", {})
+            .get("news", {})
+        )
+        max_days = news_cfg.get("max_days", 7)
+        max_per_horse = news_cfg.get("max_articles_per_horse", 5)
+
+        try:
+            response = self.http_client.get(
+                "https://rss.netkeiba.com/?pid=rss_netkeiba",
+                cache_ttl=43200,  # 12時間キャッシュ
+            )
+            root = ET.fromstring(response.text)
+        except Exception as e:
+            self.logger.warning(f"News RSS fetch failed: {e}")
+            return []
+
+        articles = []
+        for item in root.iter("item"):
+            title_el = item.find("title")
+            link_el = item.find("link")
+            date_el = item.find("pubDate")
+
+            title = title_el.text if title_el is not None and title_el.text else ""
+            link = link_el.text if link_el is not None and link_el.text else ""
+            date_str = date_el.text if date_el is not None and date_el.text else ""
+
+            if not title:
+                continue
+
+            # 馬名でフィルタ
+            for name in horse_names:
+                if name and name in title:
+                    articles.append({
+                        "horse_name": name,
+                        "title": title,
+                        "url": link,
+                        "date": date_str,
+                    })
+                    break
+
+        # 馬ごとに上限適用
+        counts: dict[str, int] = {}
+        filtered = []
+        for a in articles:
+            name = a["horse_name"]
+            counts[name] = counts.get(name, 0) + 1
+            if counts[name] <= max_per_horse:
+                filtered.append(a)
+
+        return filtered
+
+    def _attach_news_to_horses(self, horse_intel: list[dict], news: list[dict]) -> None:
+        """取得したニュースを各馬のintelに紐付け。"""
+        for intel in horse_intel:
+            name = intel.get("horse_name", "")
+            matched = [n for n in news if n.get("horse_name") == name]
+            if matched:
+                intel["news_items"] = [
+                    {
+                        "source": "netkeiba",
+                        "title": n["title"],
+                        "content": "",
+                        "relevance": 0.7,
+                        "url": n.get("url", ""),
+                        "news_date": n.get("date", ""),
+                    }
+                    for n in matched
+                ]
 
     def _build_backtest_data(self) -> list[dict]:
         """バックテストデータを構築（設定でリクエスト数を制限）"""

@@ -67,10 +67,15 @@ class MLPredictor(BaseAgent):
             context.ml_analysis = None
             return context
 
-        # DataFrame構築（feature_namesに整列）
+        # DataFrame構築（feature_namesに整列。旧モデルは25次元→新特徴量を0パディング）
+        model_feature_count = len(self.feature_names) if self.feature_names else len(FEATURE_COLUMNS)
         aligned_data = []
         for row in rows:
-            aligned_data.append([row.get(col, 0.0) for col in FEATURE_COLUMNS])
+            if len(FEATURE_COLUMNS) > model_feature_count:
+                # 新特徴量があるが旧モデルは対応していない → 旧次元のみ使用
+                aligned_data.append([row.get(col, 0.0) for col in self.feature_names])
+            else:
+                aligned_data.append([row.get(col, 0.0) for col in FEATURE_COLUMNS])
 
         try:
             import numpy as np
@@ -84,8 +89,8 @@ class MLPredictor(BaseAgent):
         if hasattr(raw_scores, "tolist"):
             raw_scores = raw_scores.tolist()
 
-        # softmax正規化（Teddy Koker アプローチ: レース内相対評価）
-        probabilities = self._softmax(raw_scores)
+        # レース内正規化（比例正規化 → softmax フォールバック）
+        probabilities = self._normalize_probabilities(raw_scores)
 
         # feature importance取得
         importance = self._get_feature_importance()
@@ -127,8 +132,17 @@ class MLPredictor(BaseAgent):
         self.logger.info(f"ML予測完了: {len(results)}頭, 1位={results[0]['horse_name'] if results else 'N/A'}")
         return context
 
-    def _softmax(self, scores: list[float], temperature: float = 1.0) -> list[float]:
-        """ソフトマックスで確率を正規化"""
+    def _normalize_probabilities(self, scores: list[float]) -> list[float]:
+        """レース内確率正規化。raw_scoreが全て正なら比例、そうでなければ低温度softmax。"""
+        if not scores:
+            return []
+        total = sum(scores)
+        if total > 0 and all(s >= 0 for s in scores):
+            return [s / total for s in scores]
+        return self._softmax(scores, temperature=0.05)
+
+    def _softmax(self, scores: list[float], temperature: float = 0.05) -> list[float]:
+        """低温度softmax（フォールバック用）"""
         if not scores:
             return []
         mean = sum(scores) / len(scores)

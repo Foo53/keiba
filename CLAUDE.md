@@ -2,6 +2,67 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## 🏢 社員チーム運用ルール
+
+このプロジェクトは **Leader（リーダー）が窓口** のチーム運用です。ユーザーはリーダーとだけ会話し、リーダーが必要に応じて専門AI社員へ作業を分担します。
+
+### リーダーファーストの原則
+
+- **ユーザーはリーダー（`.claude/agents/leader.md`）とだけ対話**
+- リーダーがタスクを適切な専門社員に振り分ける
+- 専門社員はリーダーに結果を報告し、リーダーが統合してユーザーに報告
+- **フロー**: `ユーザー → leader → 専門社員 → leader → ユーザー`
+
+### 作業の振り分けルール
+
+| ユーザーの指示 | 担当社員（`.claude/agents/`） | 対応Agent番号 |
+|-------------|---------------------------|-------------|
+| 過去データの取得・確認 | `data-engineer.md` | 1-3 |
+| 特徴量の生成・確認 | `python-analyst.md` | 4 |
+| 統計分析の実行 | `python-analyst.md` | 5 |
+| ML予測・モデル改善 | `ml-engineer.md` | 6, 学習 |
+| Web情報の調査 | `web-researcher.md` | 7 |
+| オッズ評価・妙味判定 | `odds-analyst.md` | 9-10 |
+| 予想・買い目の生成 | `prediction-writer.md` | 8, 11 |
+| バックテストの実行 | `backtest-engineer.md` | 12 |
+| Note記事の作成 | `note-writer.md` | 13-15 |
+| 品質チェック・レビュー | `qa-reviewer.md` | 16 |
+| レース後の振り返り・改善分析 | `post-race-analyst.md` | 横断 |
+| パイプライン全体実行 | `leader.md` が各社員に指示 | 1-16 |
+
+### 競馬予想における表現ルール（重要）
+
+競馬予想の記事・レポートでは、以下の禁止表現を**絶対に使用しない**こと（`src/keiba/models/note.py` の `PROHIBITED_WORDS` 参照）。
+
+**禁止表現（17種）:**
+- 断定的表現: 絶対、確定、鉄板、確実、必勝
+- 収益保証: 必ず儲かる、回収保証、100%、稼げる、儲かる
+- 射幸心煽動: 必ず当たる、間違いなく、間違いない、これだけ買えば勝てる、負けない、ノーリスク、安全
+
+**推奨表現:** 「推定」「見込み」「傾向がある」「可能性が高い」「と予想される」「と分析している」
+
+### 標準フロー
+
+```
+1. データ取得 → data-engineer (Agent 1-3)
+2. 特徴量生成 → python-analyst (Agent 4)
+3. 分析（並列）→ python-analyst (5) + ml-engineer (6) + web-researcher (7)
+4. 根拠統合 → prediction-writer (Agent 8)
+5. オッズ評価 → odds-analyst (Agent 9-10)
+6. 予想生成 → prediction-writer (Agent 11)
+7. バックテスト → backtest-engineer (Agent 12)
+8. 記事生成 → note-writer (Agent 13-15)
+9. QA → qa-reviewer (Agent 16) → 不合格なら差し戻し（最大3回）
+```
+
+### 変更前後のルール
+
+1. **変更前**: 変更計画をユーザーに提示し、承認を得る
+2. **変更後**: テスト結果（`pytest`）を報告し、通過を確認
+3. **main ブランチへの直接 push 禁止**: ブランチを作成してPRで反映
+
+---
+
 ## このリポジトリについて
 
 中央競馬（JRA）の重賞レース向け予想システム。16エージェントのパイプラインでデータ取得→特徴量生成→統計分析+ML予測→根拠統合→予想生成→Note記事生成までを自動実行する。

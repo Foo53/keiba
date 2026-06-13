@@ -374,3 +374,82 @@ class TestHealthCheck:
     def test_unhealthy(self, scraper, mock_client):
         mock_client.get.side_effect = Exception("connection error")
         assert scraper.health_check() is False
+
+
+# ------------------------------------------------------------------
+# 調教インテリジェンス推定
+# ------------------------------------------------------------------
+
+class TestDeriveTrainingIntelligence:
+    def test_empty_input(self):
+        result = NetkeibaScraper.derive_training_intelligence([])
+        assert result["training_reports"] == []
+        assert result["form_trend"] == "stable"
+        assert result["fitness_score"] == 0.5
+
+    def test_improving_trend(self):
+        pp = [
+            {"finish_position": 1, "last_3f": 33.5, "popularity": 3, "race_date": "2026-05-20", "weight_change": 0},
+            {"finish_position": 3, "last_3f": 33.9, "popularity": 4, "race_date": "2026-04-28", "weight_change": 2},
+            {"finish_position": 5, "last_3f": 34.2, "popularity": 2, "race_date": "2026-04-05", "weight_change": -1},
+        ]
+        result = NetkeibaScraper.derive_training_intelligence(pp)
+        assert result["form_trend"] == "improving"
+        assert result["fitness_score"] > 0.5
+        assert any("改善" in r for r in result["training_reports"])
+        assert any("上昇" in r for r in result["training_reports"])
+
+    def test_declining_trend(self):
+        pp = [
+            {"finish_position": 9, "last_3f": 35.0, "popularity": 2, "race_date": "2026-05-20", "weight_change": -4},
+            {"finish_position": 5, "last_3f": 34.3, "popularity": 3, "race_date": "2026-04-28", "weight_change": -2},
+            {"finish_position": 3, "last_3f": 33.8, "popularity": 1, "race_date": "2026-04-05", "weight_change": 0},
+        ]
+        result = NetkeibaScraper.derive_training_intelligence(pp)
+        assert result["form_trend"] == "declining"
+        assert result["fitness_score"] < 0.5
+
+    def test_stable_trend(self):
+        pp = [
+            {"finish_position": 4, "last_3f": 34.0, "popularity": 3, "race_date": "2026-05-20", "weight_change": 0},
+            {"finish_position": 3, "last_3f": 34.0, "popularity": 4, "race_date": "2026-04-28", "weight_change": 1},
+            {"finish_position": 4, "last_3f": 34.1, "popularity": 3, "race_date": "2026-04-05", "weight_change": -1},
+        ]
+        result = NetkeibaScraper.derive_training_intelligence(pp)
+        assert result["form_trend"] == "stable"
+        assert result["fitness_score"] == 0.5
+
+    def test_race_interval_short(self):
+        pp = [
+            {"finish_position": 3, "last_3f": 34.0, "popularity": 2, "race_date": "2026-05-20"},
+            {"finish_position": 5, "last_3f": 34.2, "popularity": 3, "race_date": "2026-05-10"},
+        ]
+        result = NetkeibaScraper.derive_training_intelligence(pp)
+        assert any("詰め寄り" in r for r in result["training_reports"])
+
+    def test_race_interval_long(self):
+        pp = [
+            {"finish_position": 3, "last_3f": 34.0, "popularity": 2, "race_date": "2026-05-20"},
+            {"finish_position": 5, "last_3f": 34.2, "popularity": 3, "race_date": "2026-03-01"},
+        ]
+        result = NetkeibaScraper.derive_training_intelligence(pp)
+        assert any("間隔空く" in r or "久々" in f for r, f in zip(result["training_reports"], result["notable_factors"]))
+
+    def test_weight_heavy_gain(self):
+        pp = [
+            {"finish_position": 5, "last_3f": 34.0, "popularity": 3, "race_date": "2026-05-20", "weight_change": 4},
+            {"finish_position": 4, "last_3f": 34.1, "popularity": 3, "race_date": "2026-04-28", "weight_change": 3},
+            {"finish_position": 3, "last_3f": 34.0, "popularity": 4, "race_date": "2026-04-05", "weight_change": 2},
+        ]
+        result = NetkeibaScraper.derive_training_intelligence(pp)
+        assert any("増加" in r for r in result["training_reports"])
+
+    def test_popularity_beating(self):
+        """人気以上の好走傾向"""
+        pp = [
+            {"finish_position": 1, "last_3f": 33.5, "popularity": 5, "race_date": "2026-05-20"},
+            {"finish_position": 2, "last_3f": 33.8, "popularity": 6, "race_date": "2026-04-28"},
+            {"finish_position": 3, "last_3f": 34.0, "popularity": 4, "race_date": "2026-04-05"},
+        ]
+        result = NetkeibaScraper.derive_training_intelligence(pp)
+        assert any("人気以上" in f for f in result["notable_factors"])

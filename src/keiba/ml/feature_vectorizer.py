@@ -37,6 +37,10 @@ FEATURE_COLUMNS = [
     "field_size",
     "jockey_course_win_rate",
     "best_3f_gap",
+    # 重賞特化特徴量 (26-28)
+    "jockey_grade_win_rate",
+    "horse_grade_top3_rate",
+    "grade_form_score",
 ]
 
 
@@ -114,6 +118,10 @@ def vectorize_horse_features(hf: dict, field_size: int) -> dict[str, float]:
         "field_size": float(field_size),
         "jockey_course_win_rate": float(hf.get("jockey_course_win_rate") or 0),
         "best_3f_gap": best_3f_gap,
+        # 重賞特化特徴量
+        "jockey_grade_win_rate": float(hf.get("jockey_grade_win_rate") or 0),
+        "horse_grade_top3_rate": float(hf.get("horse_grade_top3_rate") or 0),
+        "grade_form_score": float(hf.get("grade_form_score") or 0),
     }
     return row
 

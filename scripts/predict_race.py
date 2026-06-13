@@ -1,56 +1,31 @@
-"""安田記念 2026 予測スクリプト
+"""汎用レース予測スクリプト
 
-JRA-VAN DBから各馬の過去成績・騎手厩舎統計を取得し、
-学習済みLightGBMモデルで勝率を推定する。
+racecard JSON + レース情報から ML予測を実行する。
+JRA-VAN DBから過去成績・騎手厩舎統計を取得し、学習済みLightGBMモデルで勝率を推定。
 """
 
 import sys
 sys.path.insert(0, "src")
 
-import sqlite3
 import json
+import math
+import argparse
 from pathlib import Path
 from collections import Counter
 from datetime import datetime
 
+import numpy as np
+import lightgbm as lgb
+
 from keiba.data.jrvan.loader import JrVanLoader, JYO_CODE_MAP, _infer_track_type
 
-# 安田記念 2026 出走馬（枠順確定済・6/5時点・17頭立て）
-# アスクイキゴミ(回避・BCマイル)、アドマイヤズーム(回避・蹄故障)、セフィロ(回避)を除外
-HORSES = [
-    {"name": "レーベンスティール", "hid": "2020102078", "umaban": 1,  "sex": "1", "age": 6, "weight": 58.0, "jockey_code": "05386", "jockey_name": "戸崎圭太",   "trainer_name": "田中博康"},
-    {"name": "ロングラン",         "hid": "2018104708", "umaban": 2,  "sex": "3", "age": 8, "weight": 58.0, "jockey_code": "05675", "jockey_name": "ゴンサルベ",   "trainer_name": "和田勇介"},
-    {"name": "オフトレイル",       "hid": "2021110031", "umaban": 3,  "sex": "1", "age": 5, "weight": 58.0, "jockey_code": "01179", "jockey_name": "菅原明良",   "trainer_name": "吉村圭司"},
-    {"name": "シックスペンス",     "hid": "2021105724", "umaban": 4,  "sex": "1", "age": 5, "weight": 58.0, "jockey_code": "00666", "jockey_name": "武豊",       "trainer_name": "田中博康"},
-    {"name": "サクラトゥジュール", "hid": "2017103751", "umaban": 5,  "sex": "3", "age": 9, "weight": 58.0, "jockey_code": "01197", "jockey_name": "佐々木大輔", "trainer_name": "堀宣行"},
-    {"name": "ステレンボッシュ",   "hid": "2021105743", "umaban": 6,  "sex": "2", "age": 5, "weight": 56.0, "jockey_code": "05585", "jockey_name": "レーン",     "trainer_name": "宮田敬介"},
-    {"name": "スズハローム",       "hid": "2020105018", "umaban": 7,  "sex": "1", "age": 6, "weight": 58.0, "jockey_code": "01138", "jockey_name": "藤懸貴志",   "trainer_name": "牧田和弥"},
-    {"name": "シャンパンカラー",   "hid": "2020103075", "umaban": 8,  "sex": "1", "age": 6, "weight": 58.0, "jockey_code": "05203", "jockey_name": "岩田康誠",   "trainer_name": "田中剛"},
-    {"name": "ウォーターリヒト",   "hid": "2021100953", "umaban": 9,  "sex": "1", "age": 5, "weight": 58.0, "jockey_code": "01213", "jockey_name": "高杉吏麒",   "trainer_name": "石橋守"},
-    {"name": "ルクソールカフェ",   "hid": "2022110083", "umaban": 10, "sex": "1", "age": 4, "weight": 58.0, "jockey_code": "01174", "jockey_name": "岩田望来",   "trainer_name": "堀宣行"},
-    {"name": "ワールズエンド",     "hid": "2021105864", "umaban": 11, "sex": "1", "age": 5, "weight": 58.0, "jockey_code": "01092", "jockey_name": "津村明秀",   "trainer_name": "池添学"},
-    {"name": "シリウスコルト",     "hid": "2021104094", "umaban": 12, "sex": "1", "age": 5, "weight": 58.0, "jockey_code": "01140", "jockey_name": "横山和生",   "trainer_name": "田中勝春"},
-    {"name": "セイウンハーデス",   "hid": "2019102632", "umaban": 13, "sex": "1", "age": 7, "weight": 58.0, "jockey_code": "00732", "jockey_name": "幸英明",     "trainer_name": "橋口慎介"},
-    {"name": "ガイアフォース",     "hid": "2019104476", "umaban": 14, "sex": "1", "age": 7, "weight": 58.0, "jockey_code": "01170", "jockey_name": "横山武史",   "trainer_name": "杉山晴紀"},
-    {"name": "ドラゴンブースト",   "hid": "2022105891", "umaban": 15, "sex": "1", "age": 4, "weight": 58.0, "jockey_code": "01091", "jockey_name": "丹内祐次",   "trainer_name": "藤野健太"},
-    {"name": "パンジャタワー",     "hid": "2022101732", "umaban": 16, "sex": "1", "age": 4, "weight": 58.0, "jockey_code": "01126", "jockey_name": "松山弘平",   "trainer_name": "橋口慎介"},
-    {"name": "トロヴァトーレ",     "hid": "2021105557", "umaban": 17, "sex": "1", "age": 5, "weight": 58.0, "jockey_code": "05339", "jockey_name": "ルメール",   "trainer_name": "鹿戸雄一"},
-]
 
-RACE_DATE = "2026-06-07"
-RACE_INFO = {
-    "race_id": "202606070511",
-    "race_name": "安田記念",
-    "course": "東京",
-    "distance": 1600,
-    "track_type": "芝",
-    "grade": "GI",
-    "field_size": 17,
-}
+def load_racecard(path: str) -> dict:
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
 
 
 def get_past_performances(conn, horse_ids, before_date):
-    """過去戦績を取得（JrVanDataSource._get_past_performances と同じロジック）"""
     if not horse_ids:
         return {}
     placeholders = ",".join("?" for _ in horse_ids)
@@ -65,6 +40,9 @@ def get_past_performances(conn, horse_ids, before_date):
     perfs = {}
     for r in rows:
         hid = r["ketto_toroku_bango"]
+        # sqlite3.Row は .get() 非対応のため括弧アクセス＋try
+        popular = r["popular"] if "popular" in r.keys() else ""
+        horse_w = r["horse_weight"] if "horse_weight" in r.keys() else ""
         pp = {
             "distance": int(r["distance_m"]) if r["distance_m"] else 2000,
             "finish_position": int(r["arrival_order"]) if r["arrival_order"] else 0,
@@ -75,13 +53,14 @@ def get_past_performances(conn, horse_ids, before_date):
             "running_style": _infer_style(r),
             "grade": _decode_grade(r["grade_code"]),
             "race_date": r["race_date"],
+            "popularity": int(popular) if popular and str(popular).isdigit() else None,
+            "horse_weight": int(horse_w) if horse_w and str(horse_w).isdigit() else None,
         }
         perfs.setdefault(hid, []).append(pp)
     return perfs
 
 
 def _infer_style(row):
-    """コーナー通過順から脚質推定"""
     corners = []
     for c in ["corner1_order", "corner2_order", "corner3_order", "corner4_order"]:
         val = row[c] if c in row.keys() else ""
@@ -117,10 +96,10 @@ def _decode_grade(grade_code):
 
 
 def get_jockey_stats(conn, jockey_ids, before_date):
-    """騎手成績を集計（全体＋重賞限定）"""
-    if not jockey_ids:
+    valid_ids = [j for j in jockey_ids if j and j != "00000"]
+    if not valid_ids:
         return {}
-    placeholders = ",".join("?" for _ in jockey_ids)
+    placeholders = ",".join("?" for _ in valid_ids)
     rows = conn.execute(
         f"SELECT jockey_code, "
         f"COUNT(*) as total, "
@@ -129,7 +108,7 @@ def get_jockey_stats(conn, jockey_ids, before_date):
         f"WHERE jockey_code IN ({placeholders}) AND race_date < ? "
         f"AND is_valid_result = '1' "
         f"GROUP BY jockey_code",
-        (*jockey_ids, before_date),
+        (*valid_ids, before_date),
     ).fetchall()
 
     stats = {}
@@ -142,11 +121,10 @@ def get_jockey_stats(conn, jockey_ids, before_date):
             "total_rides": total,
             "wins": wins,
             "win_rate": round(wins / total, 3) if total > 0 else 0,
-            "course_stats": {},
             "grade_stats": {},
         }
 
-    # 重賞限定成績（GI/GII/GIII: grade_code A/B/C）
+    # 重賞限定成績
     grade_rows = conn.execute(
         f"SELECT jockey_code, "
         f"COUNT(*) as total, "
@@ -156,7 +134,7 @@ def get_jockey_stats(conn, jockey_ids, before_date):
         f"AND is_valid_result = '1' "
         f"AND (grade_code LIKE 'A%' OR grade_code LIKE 'B%' OR grade_code LIKE 'C%') "
         f"GROUP BY jockey_code",
-        (*jockey_ids, before_date),
+        (*valid_ids, before_date),
     ).fetchall()
     for r in grade_rows:
         jid = r["jockey_code"]
@@ -166,53 +144,6 @@ def get_jockey_stats(conn, jockey_ids, before_date):
             "grade_total": total,
             "grade_wins": wins,
             "grade_win_rate": round(wins / total, 3) if total > 0 else 0,
-        }
-
-    # 東京コース成績
-    for jid in jockey_ids:
-        course_rows = conn.execute(
-            "SELECT jyo_code, "
-            "COUNT(*) as total, "
-            "SUM(CASE WHEN arrival_order = '1' THEN 1 ELSE 0 END) as wins "
-            "FROM race_horse_detail "
-            "WHERE jockey_code = ? AND race_date < ? AND is_valid_result = '1' "
-            "GROUP BY jyo_code",
-            (jid, before_date),
-        ).fetchall()
-        for cr in course_rows:
-            course = JYO_CODE_MAP.get(cr["jyo_code"], "")
-            if course and cr["total"] > 0:
-                stats.setdefault(jid, {}).setdefault("course_stats", {})[course] = {
-                    "win_rate": round(cr["wins"] / cr["total"], 3)
-                }
-    return stats
-
-
-def get_trainer_stats(conn, trainer_names, before_date):
-    """調教師成績を集計"""
-    if not trainer_names:
-        return {}
-    placeholders = ",".join("?" for _ in trainer_names)
-    rows = conn.execute(
-        f"SELECT trainer_name_short, "
-        f"COUNT(*) as total, "
-        f"SUM(CASE WHEN arrival_order = '1' THEN 1 ELSE 0 END) as wins "
-        f"FROM race_horse_detail "
-        f"WHERE trainer_name_short IN ({placeholders}) AND race_date < ? "
-        f"AND is_valid_result = '1' "
-        f"GROUP BY trainer_name_short",
-        (*trainer_names, before_date),
-    ).fetchall()
-
-    stats = {}
-    for r in rows:
-        name = r["trainer_name_short"]
-        total = r["total"]
-        wins = r["wins"]
-        stats[name] = {
-            "win_rate": round(wins / total, 3) if total > 0 else 0,
-            "total_runs": total,
-            "wins": wins,
         }
     return stats
 
@@ -294,7 +225,6 @@ def calc_form(pp_list):
 
 
 def calc_grade_form(pp_list):
-    """重賞限定のフォームスコア。重賞好走経験を優遇。"""
     grade_pp = [pp for pp in pp_list if pp.get("grade") in ("GI", "GII", "GIII")]
     if not grade_pp:
         return 0.0
@@ -307,7 +237,6 @@ def calc_grade_form(pp_list):
 
 
 def calc_horse_grade_top3_rate(pp_list):
-    """馬の重賞3着内率"""
     grade_pp = [pp for pp in pp_list if pp.get("grade") in ("GI", "GII", "GIII")]
     if not grade_pp:
         return 0.0
@@ -321,7 +250,7 @@ def detect_class_change(pp_list):
     sorted_pp = sorted(pp_list, key=lambda x: x.get("race_date", ""), reverse=True)
     grades = {"GI": 4, "GII": 3, "GIII": 2, "L": 1}
     current = grades.get(sorted_pp[0].get("grade", ""), 0)
-    prev = grades.get(sorted_pp[1].get("grade", ""), 0) if len(sorted_pp) > 1 else 0
+    prev = grades.get(sorted_pp[1].get("grade", ""), 0)
     if current > prev:
         return "up"
     elif current < prev:
@@ -342,41 +271,42 @@ def detect_distance_change(pp_list, target):
     return "same"
 
 
-def get_jt_rates(jockey_id, trainer_name, jockey_stats, trainer_stats):
-    js = jockey_stats.get(jockey_id, {})
-    ts = trainer_stats.get(trainer_name, {})
-    jt_rate = js.get("win_rate", 0)
-    jc_rate = js.get("course_stats", {}).get("東京", {}).get("win_rate", 0)
-    return round(jt_rate, 3), round(jc_rate, 3)
+def run_prediction(racecard_path: str, race_name: str, course: str,
+                   distance: int, track_type: str, grade: str,
+                   race_date: str, output_path: str):
+    """予測パイプライン実行"""
+    racecard = load_racecard(racecard_path)
+    horses = racecard["horses"]
+    race_id = racecard["race_id"]
+    field_size = len(horses)
 
+    is_jump = track_type == "障害"
+    print(f"\n{'='*80}")
+    print(f"🏇 {race_name}({grade}) {race_date} {course} {track_type}{distance}m")
+    if is_jump:
+        print("⚠️ 障害レース: MLモデルは平地競走で学習しているため参考値として扱う")
+    print(f"{'='*80}")
 
-def main():
     # DB接続
     loader = JrVanLoader()
     conn = loader.get_connection()
 
-    horse_ids = [h["hid"] for h in HORSES]
-    jockey_ids = list({h["jockey_code"] for h in HORSES})
-    trainer_names = list({h["trainer_name"] for h in HORSES})
+    horse_ids = [h["horse_id"] for h in horses if h.get("horse_id")]
+    jockey_ids = list({h.get("jockey_code") for h in horses if h.get("jockey_code") and h["jockey_code"] != "00000"})
 
     # データ取得
-    print("📊 過去戦績・騎手厩舎統計を取得中...", flush=True)
-    past_perfs = get_past_performances(conn, horse_ids, RACE_DATE)
-    jockey_stats = get_jockey_stats(conn, jockey_ids, RACE_DATE)
-    trainer_stats = get_trainer_stats(conn, trainer_names, RACE_DATE)
+    print("📊 過去戦績・騎手統計を取得中...", flush=True)
+    past_perfs = get_past_performances(conn, horse_ids, race_date)
+    jockey_stats = get_jockey_stats(conn, jockey_ids, race_date)
     conn.close()
 
-    # 各馬の特徴量生成
-    distance = RACE_INFO["distance"]
-    course = RACE_INFO["course"]
-    field_size = len(HORSES)
+    # 特徴量生成
+    print(f"\n🐎 出走馬特徴量生成 ({field_size}頭)", flush=True)
+    print("-" * 80, flush=True)
 
     horse_features = []
-    print(f"\n🐎 出走馬特徴量生成 ({len(HORSES)}頭)", flush=True)
-    print("=" * 80, flush=True)
-
-    for h in HORSES:
-        hid = h["hid"]
+    for h in horses:
+        hid = h.get("horse_id", "")
         pp_list = past_perfs.get(hid, [])
 
         dist_score = calc_distance_aptitude(pp_list, distance)
@@ -387,15 +317,16 @@ def main():
         recent3, recent5, form_score = calc_form(pp_list)
         class_change = detect_class_change(pp_list)
         distance_change = detect_distance_change(pp_list, distance)
-        jt_rate, jc_rate = get_jt_rates(h["jockey_code"], h["trainer_name"], jockey_stats, trainer_stats)
 
-        # 重賞特化特徴量
-        grade_form = calc_grade_form(pp_list)
-        grade_top3_rate = calc_horse_grade_top3_rate(pp_list)
-        grade_stats = jockey_stats.get(h["jockey_code"], {}).get("grade_stats", {})
+        jid = h.get("jockey_code", "")
+        js = jockey_stats.get(jid, {})
+        jt_rate = js.get("win_rate", 0)
+        grade_stats = js.get("grade_stats", {})
         jockey_grade_rate = grade_stats.get("grade_win_rate", 0)
 
-        # 近走成績
+        grade_form = calc_grade_form(pp_list)
+        grade_top3_rate = calc_horse_grade_top3_rate(pp_list)
+
         podium_count = sum(1 for p in recent3 if 1 <= p <= 3)
         recent_win_rate = podium_count / len(recent3) if recent3 else 0.0
         place_count = sum(1 for p in recent5 if 1 <= p <= 3)
@@ -403,16 +334,13 @@ def main():
         avg_recent_position = sum(recent5) / len(recent5) if recent5 else 5.0
         last_run_position = float(recent3[0]) if recent3 else 5.0
 
-        # 上がり一貫性
         avg_3f_val = avg_3f if avg_3f is not None else 34.0
         best_3f_val = best_3f if best_3f is not None else 34.5
         best_3f_gap = avg_3f_val - best_3f_val
-
-        # コース適性best値
         course_best = max(course_score.values()) if course_score else 50.0
 
         hf = {
-            "entry_id": f"{RACE_INFO['race_id']}_{h['umaban']:02d}",
+            "entry_id": f"{race_id}_{h['umaban']:02d}",
             "horse_id": hid,
             "distance_aptitude_score": dist_score,
             "track_turf_score": turf_score,
@@ -422,21 +350,20 @@ def main():
             "style_consistency": consistency,
             "average_last_3f": avg_3f_val,
             "best_last_3f": best_3f_val,
-            "closing_speed_rank": None,  # 後で設定
+            "closing_speed_rank": None,
             "recent_3_runs": recent3,
             "recent_5_runs": recent5,
             "form_score": form_score,
             "class_change": class_change,
             "distance_change": distance_change,
             "jockey_trainer_win_rate": jt_rate,
-            "jockey_course_win_rate": jc_rate,
+            "jockey_course_win_rate": 0,
             "jockey_grade_win_rate": jockey_grade_rate,
             "horse_grade_top3_rate": grade_top3_rate,
             "grade_form_score": grade_form,
         }
         horse_features.append(hf)
 
-        # ログ出力
         pp_count = len(pp_list)
         recent_str = "→".join(str(p) for p in recent3) if recent3 else "N/A"
         print(
@@ -444,52 +371,39 @@ def main():
             f"戦{pp_count:2d} 近走[{recent_str}] "
             f"脚質={style} 距離適性={dist_score:.0f} "
             f"上3F={avg_3f_val:.1f} "
-            f"騎手勝率={jt_rate:.1%} 重賞勝率={jockey_grade_rate:.1%} "
+            f"騎手勝率={jt_rate:.1%} "
             f"フォーム={form_score:.0f} 重賞F={grade_form:.0f}",
             flush=True,
         )
 
-    # 上がりランク再計算（全馬比較）
-    all_avg = [(i, hf["average_last_3f"]) for i, hf in enumerate(horse_features) if hf["average_last_3f"] is not None]
+    # 上がりランク
+    all_avg = [(i, hf["average_last_3f"]) for i, hf in enumerate(horse_features)]
     all_avg.sort(key=lambda x: x[1])
     for rank, (idx, _) in enumerate(all_avg, 1):
         horse_features[idx]["closing_speed_rank"] = rank
 
-    # vectorize_race と同じ形式に変換
+    # ML予測
     from keiba.ml.feature_vectorizer import vectorize_horse_features, FEATURE_COLUMNS
 
-    features = {
-        "horse_features": horse_features,
-        "field_size": field_size,
-    }
-
     rows = [vectorize_horse_features(hf, field_size) for hf in horse_features]
-
-    # LightGBM予測
-    print(f"\n📈 LightGBM予測実行...", flush=True)
-
-    import lightgbm as lgb
-    import numpy as np
 
     model_path = Path("data/store/models/lgbm_latest.txt")
     metadata_path = Path("data/store/models/lgbm_metadata.json")
 
     if not model_path.exists():
-        print("❌ 学習済みモデルが存在しません", flush=True)
-        return
+        print("❌ 学習済みモデルなし", flush=True)
+        return None
 
     model = lgb.Booster(model_file=str(model_path))
     metadata = json.loads(metadata_path.read_text(encoding="utf-8")) if metadata_path.exists() else {}
 
-    # モデルの特徴量数に合わせて列を揃える（旧モデル25次元 → 新28次元への後方互換）
     model_feature_names = metadata.get("feature_names", FEATURE_COLUMNS)
     aligned_data = [[row.get(col, 0.0) for col in model_feature_names] for row in rows]
 
     X = np.array(aligned_data)
     raw_scores = model.predict(X).tolist()
 
-    # レース内正規化（比例正規化 → softmax フォールバック）
-    import math
+    # 正規化
     total_raw = sum(raw_scores)
     if total_raw > 0 and all(s >= 0 for s in raw_scores):
         probabilities = [s / total_raw for s in raw_scores]
@@ -500,86 +414,98 @@ def main():
         total_exp = sum(exps)
         probabilities = [e / total_exp for e in exps]
 
-    # 結果表示
-    print("\n" + "=" * 80, flush=True)
-    print("🏇 第76回安田記念(GI) 2026/6/7 東京 芝1600m", flush=True)
-    print("=" * 80, flush=True)
-    print(f"モデル: val_AUC={metadata.get('val_auc', 'N/A')} test_AUC={metadata.get('test_auc', 'N/A')}", flush=True)
-    print(f"学習データ: {metadata.get('train_samples', 0):,}件 (JRA-VAN 27年分)", flush=True)
-    print("-" * 80, flush=True)
-
     # ランキング
-    ranked = list(enumerate(range(len(HORSES))))
-    ranked.sort(key=lambda x: raw_scores[x[1]], reverse=True)
+    ranked_indices = sorted(range(len(horses)), key=lambda i: raw_scores[i], reverse=True)
 
     results = []
-    for rank, (idx, _) in enumerate(ranked, 1):
-        h = HORSES[idx]
+    for rank, idx in enumerate(ranked_indices, 1):
+        h = horses[idx]
         prob = probabilities[idx]
         raw = raw_scores[idx]
         hf = horse_features[idx]
-        style = hf["primary_style"]
-        form = hf["form_score"]
 
-        line = (
-            f"  {rank:2d}位 ★{h['umaban']:2d}番 {h['name']:14s} "
-            f"勝率={prob:.1%}  スコア={raw:.4f}  "
-            f"脚質={style}  近走F={form:.0f}"
-        )
-        if rank <= 5:
-            line = "🔥" + line[1:]
-        print(line, flush=True)
         results.append({
             "rank": rank,
             "umaban": h["umaban"],
+            "wakuban": h["wakuban"],
             "name": h["name"],
+            "sex": h["sex"],
+            "age": h["age"],
+            "weight": h["weight"],
+            "jockey": h["jockey"],
+            "trainer": h["trainer"],
+            "barn": h["barn"],
+            "horse_id": h.get("horse_id", ""),
             "probability": round(prob, 4),
             "raw_score": round(raw, 4),
-            "style": style,
-            "form_score": form,
+            "style": hf["primary_style"],
+            "form_score": hf["form_score"],
+            "distance_aptitude": hf["distance_aptitude_score"],
+            "avg_3f": hf["average_last_3f"],
+            "recent_3": hf["recent_3_runs"],
+            "recent_5": hf["recent_5_runs"],
+            "grade_form": hf["grade_form_score"],
+            "jockey_grade_rate": hf["jockey_grade_win_rate"],
         })
 
-    # 上位3頭の詳細
-    print("\n" + "=" * 80, flush=True)
-    print("🎯 注目馬ピックアップ", flush=True)
-    print("=" * 80, flush=True)
+    # 表示
+    print(f"\n📈 予測結果", flush=True)
+    print("-" * 80, flush=True)
+    print(f"モデル: val_AUC={metadata.get('val_auc', 'N/A')} test_AUC={metadata.get('test_auc', 'N/A')}", flush=True)
+    for r in results:
+        marker = "🔥" if r["rank"] <= 5 else "  "
+        print(
+            f"{marker} {r['rank']:2d}位 {r['umaban']:2d}番 {r['name']:14s} "
+            f"勝率={r['probability']:.1%} スコア={r['raw_score']:.4f} "
+            f"脚質={r['style']} 近走F={r['form_score']:.0f}",
+            flush=True,
+        )
 
-    for r in results[:5]:
-        h = HORSES[[h["umaban"] for h in HORSES].index(r["umaban"])]
-        pp_list = past_perfs.get(h["hid"], [])
-        print(f"\n{r['rank']}位 {h['name']} ({h['jockey_name']}騎手)", flush=True)
-        print(f"  勝率推定: {r['probability']:.1%}  MLスコア: {r['raw_score']:.4f}", flush=True)
-        if pp_list:
-            print(f"  戦績: {len(pp_list)}戦  近走: {'→'.join(str(pp['finish_position']) for pp in sorted(pp_list, key=lambda x: x['race_date'], reverse=True)[:5])}", flush=True)
-            print(f"  脚質: {r['style']}  距離適性: {horse_features[[h['umaban'] for h in HORSES].index(h['umaban'])]['distance_aptitude_score']:.0f}", flush=True)
-
-    # 特徴量重要度
-    print("\n🔑 特徴量重要度 (Top 5)", flush=True)
-    importance = model.feature_importance(importance_type="gain").tolist()
-    feat_imp = sorted(zip(FEATURE_COLUMNS, importance), key=lambda x: x[1], reverse=True)
-    total_imp = sum(v for _, v in feat_imp) or 1
-    for name, imp in feat_imp[:5]:
-        print(f"  {name:<30s} {imp/total_imp:.3f}", flush=True)
-
-    # JSON保存
+    # 保存
     output = {
-        "race": RACE_INFO,
+        "race": {
+            "race_id": race_id,
+            "race_name": race_name,
+            "course": course,
+            "distance": distance,
+            "track_type": track_type,
+            "grade": grade,
+            "race_date": race_date,
+            "field_size": field_size,
+            "is_jump": is_jump,
+        },
         "model_info": {
             "val_auc": metadata.get("val_auc"),
             "test_auc": metadata.get("test_auc"),
             "train_samples": metadata.get("train_samples"),
+            "note": "障害レースのため参考値" if is_jump else None,
         },
         "predictions": results,
         "generated_at": datetime.now().isoformat(),
     }
 
-    output_path = Path("output/yasuda_kinen_2026.json")
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(output, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"\n💾 予測結果保存: {output_path}", flush=True)
+    out = Path(output_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(output, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"\n💾 保存: {out}", flush=True)
 
     return output
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="汎用レース予測")
+    parser.add_argument("racecard", help="racecard JSON path")
+    parser.add_argument("--name", required=True, help="レース名")
+    parser.add_argument("--course", required=True, help="競馬場")
+    parser.add_argument("--distance", required=True, type=int, help="距離(m)")
+    parser.add_argument("--track", required=True, help="コース種別 (芝/ダート/障害)")
+    parser.add_argument("--grade", required=True, help="グレード (GI/GII/GIII/JGIII等)")
+    parser.add_argument("--date", required=True, help="レース日付 (YYYY-MM-DD)")
+    parser.add_argument("--output", "-o", required=True, help="出力先")
+    args = parser.parse_args()
+
+    run_prediction(
+        args.racecard, args.name, args.course,
+        args.distance, args.track, args.grade,
+        args.date, args.output,
+    )

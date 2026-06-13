@@ -30,6 +30,16 @@ data_source:
     backtest:
       max_months: 2
       max_races: 5
+    weather:
+      enabled: true
+      cache_ttl: 1800
+    news:
+      enabled: true
+      max_days: 7
+      max_articles_per_horse: 5
+    training_intelligence:
+      enabled: true
+      lookback_races: 5
 
 logging:
   level: "INFO"
