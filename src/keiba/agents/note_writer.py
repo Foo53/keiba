@@ -42,7 +42,10 @@ class NoteWriter(BaseAgent):
         is_jump = "障害" in course or (grade and grade.startswith("J"))
 
         horses = evidence.get("horses", [])
-        ranked = sorted(horses, key=lambda h: h.get("integrated_probability", 0), reverse=True)
+        if is_jump:
+            ranked = self._rank_jump_horses(horses, entries)
+        else:
+            ranked = sorted(horses, key=lambda h: h.get("integrated_probability", 0), reverse=True)
 
         top_pick = ranked[0] if ranked else None
         second = ranked[1] if len(ranked) > 1 else None
@@ -79,7 +82,7 @@ class NoteWriter(BaseAgent):
         paid_parts = [
             self._section_paid_header(),
             self._section_paid_conclusion(top_pick, second, third, dark, ranked, entry_map, is_jump=is_jump),
-            self._section_paid_ranking(ranked, entry_map, is_jump=is_jump),
+            self._section_paid_ranking(ranked, entry_map, race_name=race_name, is_jump=is_jump),
             self._section_paid_pick("◎本命", top_pick, entry_map, web_intel, context, is_jump=is_jump),
             self._section_paid_pick("○対抗", second, entry_map, web_intel, context, is_jump=is_jump),
             self._section_paid_pick("▲単穴", third, entry_map, web_intel, context, is_jump=is_jump),
@@ -103,6 +106,11 @@ class NoteWriter(BaseAgent):
         # 公開前チェックリスト（内部確認用。記事本文には含めない）
         checklist = self._section_paid_checklist(body)
 
+        # 品質チェック（文章切れ・表現混入・合計行など）
+        quality_issues = self._validate_article_quality(body, is_jump=is_jump)
+        if quality_issues:
+            self.logger.warning(f"Note quality issues: {quality_issues}")
+
         summary = self._make_summary(top_pick, second, third, dark, pred)
 
         context.note_article = {
@@ -117,6 +125,7 @@ class NoteWriter(BaseAgent):
             "word_count": len(body),
             "prohibited_word_violations": violations,
             "pre_publish_checklist": checklist,
+            "quality_issues": quality_issues,
             "data_sources": JRAVAN_ATTRIBUTION,
         }
         self.logger.info(f"Note article created: {len(body)} chars, violations={len(violations)}")
@@ -322,14 +331,22 @@ class NoteWriter(BaseAgent):
             # 人気過熱リスクの言及
             text += (
                 "\n\n今年は「人気馬をそのまま買うレース」ではなく、"
-                "当日のオッズを見て妙味が残っている馬を選ぶレースだと見ています。"
+                + ("当日のオッズを見て評価が高い馬を選ぶレース"
+                   if is_jump
+                   else "当日のオッズを見て妙味が残っている馬を選ぶレース")
+                + "だと見ています。"
                 "有料部分では、具体的な本命馬・相手・危険な人気馬・買い目・見送り条件までまとめています。"
             )
 
-            text += (
-                "\n\n※掲載する確率は独自モデルの推定値であり、実際の的中確率を保証するものではありません。"
-                "また、当日のオッズと比較して購入判断を行います。"
-            )
+            if is_jump:
+                text += (
+                    "\n\n※本記事の評価は独自の相対評価であり、実際の的中率や利益を保証するものではありません。"
+                )
+            else:
+                text += (
+                    "\n\n※掲載する確率は独自モデルの推定値であり、実際の的中確率を保証するものではありません。"
+                    "また、当日のオッズと比較して購入判断を行います。"
+                )
 
         return text
 
@@ -365,7 +382,9 @@ class NoteWriter(BaseAgent):
             f"- {ranking_label}\n"
             "- **◎本命馬**とその理由・買い条件\n"
             "- ○対抗、▲単穴、☆評価馬の深掘り分析\n"
-            "- **危険な人気馬**（人気先行で妙味が薄くなる馬）\n"
+            "- **危険な人気馬**（"
+            + ("人気先行で過信できない馬" if is_jump else "人気先行で妙味が薄くなる馬")
+            + "）\n"
             "- **消し馬**（今回は評価を下げる馬）\n"
             "- 当日オッズ別の**買い／見送り条件**\n"
             "- 本線・保険・高配当狙いの**推奨買い目**\n"
@@ -380,6 +399,49 @@ class NoteWriter(BaseAgent):
         return ""
 
     # ── 有料部分: 最終結論 ──
+
+    def _rank_jump_horses(self, horses, entries):
+        """障害戦用ランキング: strengths/concerns/style からスコアリング"""
+        entry_map = {e.get("entry_id", ""): e for e in entries}
+
+        def score(h):
+            s = 0
+            strengths_text = " ".join(x.get("description", "") for x in h.get("strengths", []))
+            concerns_text = " ".join(x.get("description", "") for x in h.get("concerns", []))
+            eid = h.get("entry_id", "")
+            entry = entry_map.get(eid, {})
+            style = entry.get("style", "")
+
+            if "勝利" in strengths_text:
+                s += 25
+            if "安定" in strengths_text or "連対" in strengths_text:
+                s += 20
+            if "障害重賞" in strengths_text or "重賞実績" in strengths_text:
+                s += 20
+            if style in ("逃げ", "先行"):
+                s += 10
+            if "不振" in concerns_text:
+                s -= 20
+            for n in range(10, 18):
+                if f"{n}着" in concerns_text:
+                    s -= 15
+                    break
+            if "斤量" in concerns_text:
+                s -= 5
+            return s
+
+        ranked = sorted(horses, key=score, reverse=True)
+        for i, h in enumerate(ranked):
+            h["jump_score"] = score(h)
+            if i == 0:
+                h["evidence_grade"] = "S"
+            elif i <= 2:
+                h["evidence_grade"] = "A"
+            elif i <= 5:
+                h["evidence_grade"] = "B"
+            else:
+                h["evidence_grade"] = "C"
+        return ranked
 
     def _section_paid_conclusion(self, top, second, third, dark, ranked, entry_map, is_jump=False):
         lines = ["## 最終結論\n"]
@@ -437,7 +499,7 @@ class NoteWriter(BaseAgent):
                 return "・".join(parts)
 
         if strengths:
-            desc = strengths[0].get("description", "")[:20]
+            desc = self._shorten_sentence(strengths[0].get("description", ""), max_len=24)
             # 「安定した成績」の誤用チェック
             desc = self._fix_stability_wording(desc, horse)
             # is_jumpで着順に散らばりがある場合、「安定した成績」を具体表現に
@@ -465,6 +527,19 @@ class NoteWriter(BaseAgent):
             elif grade == "A":
                 parts.append("高評価")
         return "・".join(parts) if parts else ""
+
+    def _shorten_sentence(self, text: str, max_len: int = 28) -> str:
+        """文章を不自然に途中切れさせないように短縮する"""
+        if not text:
+            return ""
+        text = text.strip()
+        if len(text) <= max_len:
+            return text
+        for sep in ["。", "、", "・", " "]:
+            pos = text.rfind(sep, 0, max_len)
+            if pos >= 8:
+                return text[:pos]
+        return text[:max_len] + "…"
 
     @staticmethod
     def _fix_stability_wording(desc, horse):
@@ -526,7 +601,7 @@ class NoteWriter(BaseAgent):
 
     # ── 有料部分: モデル評価ランキング ──
 
-    def _section_paid_ranking(self, ranked, entry_map, is_jump=False):
+    def _section_paid_ranking(self, ranked, entry_map, race_name="", is_jump=False):
         heading = "総合評価ランキング（障害実績・近走内容重視）" if is_jump else "モデル評価ランキング"
         eval_label = "総合評価" if is_jump else "モデル評価"
         lines = [
@@ -570,7 +645,8 @@ class NoteWriter(BaseAgent):
             lines.append(f"| {name} | {model_eval} | {value} | {judgment} |")
 
         if is_jump:
-            lines.append("\n> ※東京ジャンプSでは平地用モデルの評価を使用せず、障害実績・近走内容・展開をもとに評価しています。")
+            race_label = race_name or "本レース"
+            lines.append(f"\n> ※{race_label}では平地用モデルの評価を使用せず、障害実績・近走内容・展開をもとに評価しています。")
         else:
             lines.append("\n> ※下位馬は省略。モデル評価は独自の統合スコアに基づく。")
         return "\n".join(lines)
@@ -725,7 +801,7 @@ class NoteWriter(BaseAgent):
             # 理由の組み立て
             reason_parts = []
             if concerns:
-                reason_parts.append(concerns[0].get("description", "")[:30])
+                reason_parts.append(self._shorten_sentence(concerns[0].get("description", ""), max_len=30))
             if style in ("追込", "差し"):
                 reason_parts.append("展開利が期待しづらい")
             elif style in ("先行", "逃げ"):
@@ -764,7 +840,7 @@ class NoteWriter(BaseAgent):
         lines = ["## 推奨買い目\n"]
 
         if pred.get("skip_recommended"):
-            lines.append(f"⚠️ **見送り推奨**: {pred.get('skip_reason', '妙味が薄い')}")
+            lines.append(f"⚠️ **見送り推奨**: {pred.get('skip_reason', '買う理由が薄い')}")
             return "\n".join(lines)
 
         has_content = False
@@ -823,7 +899,7 @@ class NoteWriter(BaseAgent):
             # 3連複フォーメーション表示
             if trio_formation and isinstance(trio_formation, dict):
                 cols = trio_formation.get("columns", [])
-                n_points = trio_formation.get("total_points", len(trio_predictions))
+                n_points = self._count_trio_formation_points(cols) or len(trio_predictions)
                 per_point = 100
                 lines.append(f"**3連複フォーメーション：{n_points}点**\n")
                 lines.append(f"各{per_point}円＝{per_point * n_points:,}円\n")
@@ -860,6 +936,41 @@ class NoteWriter(BaseAgent):
         return "\n".join(lines)
 
     # ── 有料部分: 資金配分（点数ベース自動計算） ──
+
+    @staticmethod
+    def _count_trio_formation_points(columns):
+        """3連複フォーメーションの実際の点数を再計算する"""
+        from itertools import product
+        if len(columns) != 3:
+            return 0
+        c1 = columns[0].get("numbers", [])
+        c2 = columns[1].get("numbers", [])
+        c3 = columns[2].get("numbers", [])
+        combos = set()
+        for a, b, c in product(c1, c2, c3):
+            if len({a, b, c}) == 3:
+                combos.add(tuple(sorted([a, b, c])))
+        return len(combos)
+
+    @staticmethod
+    def _normalize_allocation(allocation, total_budget=10000):
+        """資金配分の合計を total_budget に合わせる"""
+        if not allocation:
+            return allocation
+        current_total = sum(a[2] for a in allocation)
+        diff = total_budget - current_total
+        if diff == 0:
+            return allocation
+        # 不足分は本線の最初の買い目に加算
+        if diff > 0:
+            item, category, amount = allocation[0]
+            allocation[0] = (item, category, amount + diff)
+            return allocation
+        # 超過分は本線の最初の買い目から減額（最低500円）
+        over = -diff
+        item, category, amount = allocation[0]
+        allocation[0] = (item, category, max(500, amount - over))
+        return allocation
 
     def _section_paid_bankroll(self, pred):
         lines = [
@@ -901,29 +1012,27 @@ class NoteWriter(BaseAgent):
         trio_preds = pred.get("trio_predictions", [])
         trio_formation = pred.get("trio_formation")
         n_trio = len(trio_preds) if trio_preds else 0
-        if trio_formation:
-            n_trio = trio_formation.get("total_points", n_trio)
+        if trio_formation and isinstance(trio_formation, dict):
+            cols = trio_formation.get("columns", [])
+            n_trio = NoteWriter._count_trio_formation_points(cols) or n_trio
         if n_trio > 0:
             per_point = 100
             trio_total = per_point * n_trio
-            allocation.append((f"3連複フォーメーション", "高配当狙い", trio_total))
+            allocation.append(("3連複フォーメーション", "高配当狙い", trio_total))
 
         # 3連単（高配当狙い）
         trifecta = pred.get("trifecta_prediction")
         if trifecta:
             allocation.append(("3連単", "高配当狙い", 100))
 
-        # 合計を10,000円に調整
-        alloc_total = sum(a[2] for a in allocation)
-        if alloc_total > total_budget and allocation:
-            # 単勝の金額を調整して収める
-            diff = alloc_total - total_budget
-            if allocation[0][1] == "本線":
-                adjusted = max(500, allocation[0][2] - diff)
-                allocation[0] = (allocation[0][0], allocation[0][1], adjusted)
+        # 合計を10,000円に正規化
+        allocation = self._normalize_allocation(allocation, total_budget)
 
         for item, category, amount in allocation:
             lines.append(f"| {item} | {category} | {amount:,}円 |")
+
+        total = sum(a[2] for a in allocation)
+        lines.append(f"| **合計** | | **{total:,}円** |")
 
         lines.append(
             "\n> ※オッズ変動によっては配分を調整してください。"
@@ -938,11 +1047,11 @@ class NoteWriter(BaseAgent):
         top_name = top_pick["horse_name"] if top_pick else "本命馬"
         return (
             "## 見送り条件\n\n"
-            "当日オッズで妙味がなくなった場合は**無理に買わない**。\n\n"
+            "当日オッズで買う理由が薄くなった場合は**無理に買わない**。\n\n"
             "特に以下の場合は見送りを推奨：\n"
             f"- {top_name}の単勝が5倍以下に人気集中 → 軸評価を見直し、馬連中心に変更\n"
             "- 人気馬の単勝が3倍以下 → 軸としては見送り\n"
-            "- 全体的にオッズがつまらず、妙味が薄い圏に → レース全体を見送り"
+            "- 全体的にオッズがつまらず、買う理由が薄い圏に → レース全体を見送り"
         )
 
     # ── 有料部分: 免責事項 ──
@@ -1073,3 +1182,35 @@ class NoteWriter(BaseAgent):
             lines.append(f"- [x] {label}" if status == "✅" else f"- [ ] {label}")
 
         return "\n".join(lines)
+
+    def _validate_article_quality(self, body: str, is_jump: bool = False) -> list[str]:
+        """記事本文の品質をチェックし、問題があればリストで返す"""
+        issues = []
+
+        # 文章切れの検出（「波がある」は正常、「波があ」で終わる行は切れ）
+        for line in body.split("\n"):
+            stripped = line.rstrip()
+            if stripped.endswith("波があ") or stripped.endswith("良好・") or stripped.endswith("安定した成績・"):
+                issues.append(f"不自然な途中切れ: {stripped[-20:]}")
+
+        if is_jump:
+            forbidden = [
+                "LightGBM", "モデル最高評価", "モデル評価1位",
+                "勝率推定", "複勝率推定", "統合スコア",
+            ]
+            for frag in forbidden:
+                if frag in body:
+                    issues.append(f"障害戦記事に平地モデル由来の表現: {frag}")
+            # 「機械学習モデル」は否定文（使用していない旨）以外で出現したら問題
+            import re
+            for m in re.finditer("機械学習モデル", body):
+                start = m.start()
+                after = body[start + len("機械学習モデル"):start + len("機械学習モデル") + 20]
+                if "使用してい" not in after and "対象外" not in after:
+                    issues.append("障害戦記事に平地モデル由来の表現: 機械学習モデル")
+                    break
+
+        if "資金配分（合計10,000円想定）" in body and "| **合計** | | **10,000円** |" not in body:
+            issues.append("資金配分の合計行が不足、または10,000円になっていません")
+
+        return issues

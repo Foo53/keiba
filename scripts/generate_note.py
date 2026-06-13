@@ -448,10 +448,14 @@ def _add_bet_predictions(prediction: dict, ranked: list[dict], entries: list, fi
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: python scripts/generate_note.py <prediction_json_path>")
+        print("Usage: python scripts/generate_note.py <prediction_json_path> [--strict]")
         sys.exit(1)
 
-    pred_path = Path(sys.argv[1])
+    args = sys.argv[1:]
+    strict_mode = "--strict" in args
+    args = [a for a in args if a != "--strict"]
+
+    pred_path = Path(args[0])
     if not pred_path.exists():
         print(f"❌ File not found: {pred_path}")
         sys.exit(1)
@@ -482,6 +486,15 @@ def main():
 
     body = article["body_markdown"]
     violations = article.get("prohibited_word_violations", [])
+    quality_issues = article.get("quality_issues", [])
+
+    # 品質チェック結果
+    if quality_issues:
+        print("⚠️ 記事品質チェックで問題が見つかりました:", flush=True)
+        for issue in quality_issues:
+            print(f"  - {issue}", flush=True)
+        if strict_mode:
+            raise SystemExit("❌ 品質チェックに失敗したため、記事生成を停止しました。（--strict モード）")
 
     # 保存
     out_dir = pred_path.parent
