@@ -78,9 +78,9 @@ class PredictionGenerator(BaseAgent):
         max_ev = max(all_evs) if all_evs else -1
 
         skip_recommended = max_ev < -0.3
-        skip_reason = "全馬の期待値が低く、無理に買い目を出すべきではありません" if skip_recommended else None
+        skip_reason = "全馬のオッズ妙味が薄く、無理に買い目を出すべきではありません" if skip_recommended else None
 
-        entry_id_to_name = {h["entry_id"]: h["horse_name"] for h in ranked}
+        field_size = len(ranked)
 
         prediction = {
             "race_id": context.race_id,
@@ -96,6 +96,13 @@ class PredictionGenerator(BaseAgent):
         }
 
         if not skip_recommended:
+            # 3連複フォーメーション — 出走頭数に応じて幅を調整
+            trio_bets, trio_formation = self._generate_trio_predictions(ranked, field_size)
+            if trio_bets:
+                prediction["trio_predictions"] = trio_bets
+            if trio_formation:
+                prediction["trio_formation"] = trio_formation
+
             # 単勝
             if top_pick:
                 ev = evals.get(top_pick["entry_id"], {})
@@ -130,28 +137,33 @@ class PredictionGenerator(BaseAgent):
                     "stake_suggestion": "1unit",
                 }
 
-            # 馬連
-            if top_pick and second_pick:
-                combo = f"{top_pick['entry_id']}-{second_pick['entry_id']}"
-                names = [top_pick["horse_name"], second_pick["horse_name"]]
-                prob = top_pick.get("integrated_probability", 0) * second_pick.get("integrated_probability", 0)
-                prediction["quinella_prediction"] = {
+            # 馬連 — 上位3頭の組み合わせ（最大3本）
+            quinella_bets = []
+            n_quinella = min(3, len(ranked))
+            for i, j in combinations(range(n_quinella), 2):
+                h1, h2 = ranked[i], ranked[j]
+                prob = h1.get("integrated_probability", 0) * h2.get("integrated_probability", 0)
+                quinella_bets.append({
                     "bet_type": "馬連",
-                    "selection": combo,
-                    "horse_names": names,
-                    "predicted_probability": round(min(prob * 3, 0.5), 4),  # 簡易計算
+                    "selection": f"{h1['entry_id']}-{h2['entry_id']}",
+                    "horse_names": [h1["horse_name"], h2["horse_name"]],
+                    "predicted_probability": round(min(prob * 3, 0.5), 4),
                     "estimated_odds": None,
                     "expected_value": None,
-                    "confidence": "A" if prob > 0.03 else "B",
-                    "reasoning": f"本命・対抗の組み合わせ",
-                    "risk_level": "medium",
-                    "stake_suggestion": "1unit",
-                }
+                    "confidence": "A" if i == 0 and j == 1 else "B",
+                    "reasoning": "本命・対抗" if i == 0 and j == 1 else f"上位候補の組み合わせ",
+                    "risk_level": "medium" if i == 0 and j == 1 else "high",
+                    "stake_suggestion": "1unit" if i == 0 and j == 1 else "少量",
+                })
+            if quinella_bets:
+                prediction["quinella_predictions"] = quinella_bets
+                # 後方互換: 1本目をデフォルトとして保持
+                prediction["quinella_prediction"] = quinella_bets[0]
 
             # 3連単は根拠が弱い場合は出さない
             if top_pick and second_pick and dark_horse:
                 top_prob = top_pick.get("integrated_probability", 0)
-                if top_prob > 0.15:
+                if top_prob > 0.10:
                     combo = f"{top_pick['entry_id']}-{second_pick['entry_id']}-{dark_horse['entry_id']}"
                     names = [top_pick["horse_name"], second_pick["horse_name"], dark_horse["horse_name"]]
                     prediction["trifecta_prediction"] = {
@@ -168,6 +180,62 @@ class PredictionGenerator(BaseAgent):
                     }
 
         return prediction
+
+    def _generate_trio_predictions(self, ranked: list[dict], field_size: int) -> tuple:
+        """3連複フォーメーションを生成。出走頭数に応じて幅を調整。
+
+        Returns:
+            (combos, formation): combos=個別組み合わせリスト、formation=フォーメーション構造情報
+        """
+        if len(ranked) < 4:
+            return [], None
+
+        # 大人数レース（14頭以上）では1列目を3頭に拡大
+        col1_count = 3 if field_size >= 14 else 2
+        col2_count = min(6, len(ranked))
+        col3_count = min(8, len(ranked))
+
+        col1_ids = [ranked[i]["entry_id"] for i in range(min(col1_count, len(ranked)))]
+        col2_ids = [ranked[i]["entry_id"] for i in range(min(col2_count, len(ranked)))
+                     if ranked[i]["entry_id"] not in col1_ids]
+        col3_ids = [ranked[i]["entry_id"] for i in range(min(col3_count, len(ranked)))
+                     if ranked[i]["entry_id"] not in col1_ids]
+
+        entry_to_name = {h["entry_id"]: h["horse_name"] for h in ranked}
+
+        # フォーメーション展開
+        combos = []
+        for c1 in col1_ids:
+            for c2 in col2_ids:
+                for c3 in col3_ids:
+                    if c1 != c2 and c1 != c3 and c2 != c3:
+                        combo = tuple(sorted([c1, c2, c3]))
+                        if combo not in [tuple(sorted(c["selection"].split("-"))) for c in combos]:
+                            combos.append({
+                                "bet_type": "3連複",
+                                "selection": f"{c1}-{c2}-{c3}",
+                                "horse_names": [entry_to_name.get(c1, "?"),
+                                                entry_to_name.get(c2, "?"),
+                                                entry_to_name.get(c3, "?")],
+                                "reasoning": "フォーメーション買い",
+                                "risk_level": "high",
+                                "stake_suggestion": "各100円",
+                            })
+
+        # フォーメーション構造情報（NoteWriterでの表形式表示用）
+        col1_nums = [entry_to_name.get(eid, "?") for eid in col1_ids]
+        col2_nums = [entry_to_name.get(eid, "?") for eid in col2_ids]
+        col3_nums = [entry_to_name.get(eid, "?") for eid in col3_ids]
+        formation = {
+            "columns": [
+                {"label": "1列目", "numbers": col1_nums},
+                {"label": "2列目", "numbers": col2_nums},
+                {"label": "3列目", "numbers": col3_nums},
+            ],
+            "total_points": len(combos),
+        }
+
+        return combos, formation
 
     def _get_horse_name(self, context: PipelineContext, entry_id: str) -> str:
         entries = (context.current_race_data or {}).get("entries", [])

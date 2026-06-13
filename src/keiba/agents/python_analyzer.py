@@ -38,10 +38,11 @@ class PythonAnalyzer(BaseAgent):
 
         # ソフトマックスで勝率推定（スコアを正規化してから適用）
         scores = [s for _, s in scored]
-        # スコアを0中心に正規化してから温度付きsoftmax
+        # スコアを0中心に正規化 → 比例正規化
         mean_score = sum(scores) / len(scores) if scores else 0
-        normalized = [(s - mean_score) / 5.0 for s in scores]  # スケール調整
-        probabilities = self._softmax_raw(normalized, temperature=1.0)
+        shifted = [s - mean_score + 10 for s in scores]  # 正値化（オフセット+10）
+        total_shifted = sum(shifted)
+        probabilities = [s / total_shifted for s in shifted] if total_shifted > 0 else [1 / len(scores)] * len(scores)
 
         # 複勝率（top3確率）の近似: Harville公式
         results = []

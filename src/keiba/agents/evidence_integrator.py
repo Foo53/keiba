@@ -122,10 +122,19 @@ class EvidenceIntegrator(BaseAgent):
 
         # トレーニングレポート
         for report in intel.get("training_reports", []):
-            if any(w in report for w in ["好", "良好", "軽快"]):
+            if any(w in report for w in ["好", "良好", "軽快", "改善", "上昇"]):
                 strengths.append({"category": "training", "type": "strength", "description": f"調教: {report}", "confidence": 0.5, "source": "web_research"})
             elif any(w in report for w in ["普通", "軽め"]):
                 weaknesses.append({"category": "training", "type": "weakness", "description": f"調教: {report}", "confidence": 0.4, "source": "web_research"})
+            elif any(w in report for w in ["低下", "下降", "注意"]):
+                concerns.append({"category": "training", "type": "concern", "description": f"調教: {report}", "confidence": 0.5, "source": "web_research"})
+
+        # form_trend（調教推定由来）
+        trend = intel.get("form_trend", "stable")
+        if trend == "improving":
+            strengths.append({"category": "form_trend", "type": "strength", "description": "近走高调入着傾向", "confidence": 0.6, "source": "web_research"})
+        elif trend == "declining":
+            concerns.append({"category": "form_trend", "type": "concern", "description": "近走成績下降傾向", "confidence": 0.6, "source": "web_research"})
 
         impact = intel.get("impact_on_prediction", "neutral")
         if impact == "positive":
@@ -139,11 +148,21 @@ class EvidenceIntegrator(BaseAgent):
         impact = intel.get("impact_on_prediction", "neutral")
         reliability = intel.get("reliability", "medium")
         rel_mult = {"high": 1.0, "medium": 0.6, "low": 0.3}.get(reliability, 0.5)
+        adjustment = 0.0
+
         if impact == "positive":
-            return self.MAX_WEB_ADJUSTMENT * rel_mult
+            adjustment = self.MAX_WEB_ADJUSTMENT * rel_mult
         elif impact == "negative":
-            return -self.MAX_WEB_ADJUSTMENT * rel_mult
-        return 0.0
+            adjustment = -self.MAX_WEB_ADJUSTMENT * rel_mult
+
+        # fitness_score による微調整
+        fitness = intel.get("fitness_score", 0.5)
+        if fitness > 0.7:
+            adjustment += 0.05 * rel_mult
+        elif fitness < 0.3:
+            adjustment -= 0.05 * rel_mult
+
+        return max(-self.MAX_WEB_ADJUSTMENT, min(self.MAX_WEB_ADJUSTMENT, adjustment))
 
     def _assign_grade(self, win_prob: float, strengths, weaknesses, concerns) -> str:
         n_strengths = len(strengths)
